@@ -37,17 +37,19 @@ class Cell(object):
 	def __init__(self, lb, ub):
 		self.lb = lb;
 		self.ub = ub;
-		self.edgeOut1 = None
-		self.edgeOut2 = None
+		self.edgeOut = []
 
 	def mid(self):
 		return (self.lb + self.ub) / 2
 
 class Abstraction(object):
 	def __init__(self, lb, ub, eta):
-		self.lb = np.array(lb)
-		self.ub = np.array(ub)
-		self.n_dim = np.ceil((self.ub - self.lb)/eta).astype(np.uint64)
+		self.lb = np.array(lb, dtype=np.float64)
+		self.lb -= (self.lb + eta/2) % eta  # make sure that zero is in middle of cell
+		self.ub = np.array(ub, dtype=np.float64)
+		self.ub += (self.ub - self.lb) % eta # make domain number of eta's
+
+		self.n_dim = np.ceil((self.ub- self.lb)/eta).astype(np.uint64)
 		self.cell_list = [None] * np.prod(self.n_dim)
 		self.eta = eta
 
@@ -63,6 +65,8 @@ class Abstraction(object):
 
 	def get_midx_pt(self, pt):
 		assert(len(pt) == len(self.n_dim))
+		if np.any(self.lb > pt) or np.any(self.ub < pt):
+			raise('Point outside domain')
 		midx = np.floor((np.array(pt) - self.lb) / self.eta).astype(np.uint64)
 		return midx
 
@@ -71,47 +75,74 @@ class Abstraction(object):
 		ax = plt.axes()
 		for cell in self.cell_list:
 			mid_this = cell.mid()
-			mid_next = self.cell_list[midx_to_idx(cell.edgeOut1, self.n_dim)].mid()
 			plt.plot(mid_this[0], mid_this[1], 'ro')
-			ax.arrow(mid_this[0], mid_this[1],  mid_next[0] - mid_this[0], mid_next[1] - mid_this[1])
+			for eo in cell.edgeOut:
+				mid_next = self.cell_list[midx_to_idx(eo, self.n_dim)].mid()
+				ax.arrow(mid_this[0], mid_this[1],  mid_next[0] - mid_this[0], mid_next[1] - mid_this[1])
 
 		plt.show()
 
 
 def verify_bisim(data):
-	assert(data['beta'](data['eps'], data['tau']) + data['eta']/2 <= data['eps'])
+	for beta in data['beta']: 
+		assert(beta(data['eps'], data['tau']) + data['eta']/2 <= data['eps'])
+
+def verify_tree(data):
+	for beta in data['beta']: 
+		for s in np.arange(0, 2*data['eta'], 0.02):
+			try:
+				assert(beta(s, data['tau']) <= np.maximum(data['eta']/2, s - data['eta']/2))
+			except Exception, e:
+				print "tree verif failed for s = ", s
+
+def plot_treeineq(data):
+	s = np.arange(0, 3*data['eta'], 0.01)
+	c = np.maximum(data['eta']/2, s - data['eta']/2)
+	plt.plot(s,c, 'b')
+	for beta in data['beta']:
+		b = beta(s, data['tau'])
+		plt.plot(s,b, 'r')
+	plt.show()
 
 def tree_abstr(data):
 	ab = Abstraction(data['lb'], data['ub'], data['eta'])
 
-	dummy_vf = lambda z,t : data['vf'](z)
-
-	for cell in ab.cell_list:
-		x_fin = integrate.odeint(dummy_vf, cell.mid(), np.arange(0, data['tau'], data['tau']/100))
-		cell.edgeOut1 = ab.get_midx_pt(x_fin[-1])
+	for vf in data['vf']:
+		dummy_vf = lambda z,t : vf(z)
+		for cell in ab.cell_list:
+			x_fin = integrate.odeint(dummy_vf, cell.mid(), np.arange(0, data['tau'], data['tau']/100))
+			try:
+				cell.edgeOut.append( ab.get_midx_pt(x_fin[-1]) )
+			except Exception, e:
+				pass
 
 	return ab
 
 def main():
 	data = {}
 	# Define a vector fields
-	data['vf'] = lambda x : [-x[0] + x[1], -x[0] - x[1]]
+	data['vf'] = [lambda x : [-(x[0]-1) + x[1], -(x[0]-1) - x[1]], 
+	              lambda x : [-(x[0]+1) + x[1], -(x[0]+1) - x[1]]]
 
 	# Define a KL function beta(r,s) s.t. || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
-	data['beta'] = lambda r,s : r * norm( expm(s*np.array([[-1, 1], [-1, -1]])) , np.inf)
+	data['beta'] = [lambda r,s : r * norm( expm(s*np.array([[-1,  1], [-1, -1]])) , np.inf), 
+	 				lambda r,s : r * norm( expm(s*np.array([[-1, -1], [ 1, -1]])) , np.inf)]
 
 	# Define upper and lower bounds on abstraction domain
-	data['lb'] = [-1, -1]
-	data['ub'] = [1, 1]
+	data['lb'] = [-2, -1]
+	data['ub'] = [2, 1]
 
 	# Define abstraction parameters
 	data['eta'] = 0.1
 	data['eps'] = 0.3
-	data['tau'] = 0.5
+	data['tau'] = 1.1
 
 	verify_bisim(data)
+	# plot_treeineq(data)
+	verify_tree(data)
+
 	ab = tree_abstr(data) 
-	ab.plot_2d()
+	# ab.plot_2d()
 
 if __name__ == '__main__':
 	main()
