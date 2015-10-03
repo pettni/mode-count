@@ -4,7 +4,7 @@ import numpy as np
 import networkx as nx
 import scipy.linalg
 
-from treeabstr import midx_to_idx, idx_to_midx, Abstraction, lin_syst, cycle_rows
+from treeabstr import midx_to_idx, idx_to_midx, Abstraction, lin_syst, cycle_rows, cycle_matrix
 
 class treeabstrTests(unittest.TestCase):
 
@@ -44,7 +44,7 @@ class treeabstrTests(unittest.TestCase):
 		self.assertTrue(np.all(A.toarray() == scipy.linalg.block_diag(T, Tbar)))
 		self.assertTrue(np.all(B.toarray() == np.vstack([np.hstack([-T, T]), np.hstack([Tbar, -Tbar])])  ))
 
-	def test_cycle_rows(self):
+	def test_cycle_rows_matrix(self):
 		g = nx.DiGraph()
 		g.add_nodes_from([1,2,3])
 		g.add_path([2,1], mode=1)
@@ -54,6 +54,9 @@ class treeabstrTests(unittest.TestCase):
 		self.assertTrue(np.all(next(cr) ==  [1, 1, 0]))
 		self.assertTrue(np.all(next(cr) ==  [1, 0, 1]))
 		self.assertTrue(np.all(next(cr) ==  [0, 1, 1]))
+
+		cm = cycle_matrix(g, [1,2,3], 2)
+		self.assertTrue(np.all(cm == [[1, 1, 0], [1, 0, 1], [0, 1, 1]]))
 
 
 if __name__ == '__main__':

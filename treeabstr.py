@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 
 from numpy.linalg import norm
@@ -37,15 +39,22 @@ def lin_syst(G):
 
 	return A,B
 
-def cycle_rows(G, cycle, mode):
-	for k in range(len(cycle)):
-		ret = np.zeros(len(cycle), dtype=np.int8)
-		for i in range(len(cycle)):
-			v1 = cycle[(i+k) % len(cycle)]
-			v2 = cycle[(i+k+1) % len(cycle)]
-			if G[v1][v2]['mode'] == mode:
-				ret[i] = 1
-		yield ret
+def cycle_matrix(G, cycle, mode):
+	return [row for row in cycle_rows(G, cycle, mode)]
+
+def cycle_rows(G, C, mode):
+	"""
+		Return iterator that produces all combinations of 0/1 vectors vi for a given cycle C in a graph G,
+		such that vi[j] = 1 if   the mode of the edge (i + j mod L, i + j + 1 mod L) is `mode' 
+	"""
+	d = deque()
+	for i in range(len(C)):
+		v1 = C[i]
+		v2 = C[(i+1) % len(C)]
+		d.append(1 if G[v1][v2]['mode'] == mode else 0)
+	for i in range(len(C)):
+		yield list(d)
+		d.rotate(-1)
 
 def midx_to_idx(midx, mN):
 	# Given a len(mN)-dimensional matrix of with sides mN stored as a list,
