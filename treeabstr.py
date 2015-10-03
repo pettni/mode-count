@@ -37,6 +37,16 @@ def lin_syst(G):
 
 	return A,B
 
+def cycle_rows(G, cycle, mode):
+	for k in range(len(cycle)):
+		ret = np.zeros(len(cycle), dtype=np.int8)
+		for i in range(len(cycle)):
+			v1 = cycle[(i+k) % len(cycle)]
+			v2 = cycle[(i+k+1) % len(cycle)]
+			if G[v1][v2]['mode'] == mode:
+				ret[i] = 1
+		yield ret
+
 def midx_to_idx(midx, mN):
 	# Given a len(mN)-dimensional matrix of with sides mN stored as a list,
 	# return the list index corresponding to the multiindex midx
@@ -113,6 +123,10 @@ class Abstraction(object):
 		plt.show()
 
 	def add_mode(self, vf, tau):
+		"""
+			Add new dynamic mode to the abstraction, given by
+			the vector field vf and discretization tau
+		"""
 		dummy_vf = lambda z,t : vf(z)
 		for node, attr in self.graph.nodes_iter(data=True):
 			x_fin = scipy.integrate.odeint(dummy_vf, attr['mid'], np.arange(0, tau, tau/100))
