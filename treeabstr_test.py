@@ -4,7 +4,7 @@ import numpy as np
 import networkx as nx
 import scipy.linalg
 
-from treeabstr import midx_to_idx, idx_to_midx, Abstraction, lin_syst, cycle_rows, cycle_matrix
+from treeabstr import midx_to_idx, idx_to_midx, Abstraction, lin_syst, cycle_rows, cycle_matrix, sum_modes
 
 class treeabstrTests(unittest.TestCase):
 
@@ -39,8 +39,8 @@ class treeabstrTests(unittest.TestCase):
 		g.add_path([1,2,3], mode=2)
 		A,B = lin_syst(g)
 
-		T = np.array([[0, 0, 0], [1, 0, 0], [1, 0, 0]])
-		Tbar = np.array([[0, 1, 0], [0, 0, 1], [0, 0, 0]])
+		T = np.array([[0, 1, 1], [0, 0, 0], [0, 0, 0]])
+		Tbar = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
 		self.assertTrue(np.all(A.toarray() == scipy.linalg.block_diag(T, Tbar)))
 		self.assertTrue(np.all(B.toarray() == np.vstack([np.hstack([-T, T]), np.hstack([Tbar, -Tbar])])  ))
 
@@ -57,6 +57,19 @@ class treeabstrTests(unittest.TestCase):
 
 		cm = cycle_matrix(g, [1,2,3], 2)
 		self.assertTrue(np.all(cm == [[1, 1, 0], [1, 0, 1], [0, 1, 1]]))
+
+	def test_sum_modes(self):
+		state = [1,1,1,0,0,0]
+		a = sum_modes(state, 2)
+		self.assertTrue(np.all(a == [1,1,1]))
+
+		state = [1,1,1,0,2,0]
+		a = sum_modes(state, 2)
+		self.assertTrue(np.all(a == [1,3,1]))
+
+		state = [1,1,1,0,2,0,4,5,6]
+		a = sum_modes(state, 3)
+		self.assertTrue(np.all(a == [5,8,7]))
 
 
 if __name__ == '__main__':
