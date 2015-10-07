@@ -30,50 +30,48 @@ def draw_modes(G):
 		nx.draw_networkx_edges(G, pos, edgelist = edgelist, edge_color = [next(colors)] * len(edgelist))
 	nx.draw_networkx_labels(G,pos)
 
+def __maxmode(G):
+	return max([d['mode'] for (u,v,d) in  G.edges(data=True)])
+
+def stacked_eye(G):
+	n_v = len(G)
+	n = len(G) * __maxmode(G)
+	return scipy.sparse.coo_matrix( (np.ones(n), ([ (i % n_v ) for i in range(n)], range(n) )), shape = (n_v, n) )
+
 def lin_syst(G):
 	""" 
 		Return matrices A,B such that
 		[w_1(t+1); w_2(t+1); ...] = A [w_1(t); w_2(t); ...] + B [r_1(t); r_2(t); ...]
 		for modes 1, 2 ...
 	"""
-	maxmode = max([d['mode'] for (u,v,d) in  G.edges(data=True)])
 	T = nx.adjacency_matrix(G, weight='mode').transpose()
-	T_list = [ T == mode for mode in range(1, maxmode+1) ]
+	T_list = [ T == mode for mode in range(1, __maxmode(G)+1) ]
 
 	A = scipy.sparse.block_diag(tuple(T_list), dtype=np.int8)	
 	B = scipy.sparse.bmat([ [Ti for i in range(len(T_list))] for Ti in T_list ]) - 2*A
 
 	return A,B
 
-def solve_lp(G, init):
+def cycle_indices(G, ci):
+	"""
+		Return matrix Psi_i s.t.
+			Psi_i alpha_i
+		is a vector with respect to G.nodes() 
+	"""
+	row_idx = [G.nodes().index(v) for v in ci]
+	col_idx = range(len(ci))
+	vals = np.ones(len(ci))
+	return scipy.sparse.coo_matrix((vals, (row_idx, col_idx)), shape = (len(G), len(ci)) )
 
-	def sparse_scipy_to_mosek(A):
-		A_coo = A.tocoo()
-		return Matrix.sparse(A_coo.shape[0], A_coo.shape[1], list(A_coo.row.astype(int)), list(A_coo.col.astype(int)), list(A_coo.data.astype(float)))
+def sparse_scipy_to_mosek(A):
+	A_coo = A.tocoo()
+	return Matrix.sparse(A_coo.shape[0], A_coo.shape[1], list(A_coo.row.astype(int)), list(A_coo.col.astype(int)), list(A_coo.data.astype(float)))
 
-	def cycle_indices(ci):
-		"""
-			Return matrix Psi_i s.t.
-				Psi_i alpha_i
-			is a vector with respect to G.nodes() 
-		"""
-		row_idx = [G.nodes().index(v) for v in ci]
-		col_idx = range(len(ci))
-		vals = np.ones(len(ci))
-		return Matrix.sparse(len(G), len(ci), row_idx, col_idx, vals)
-
-	T = 10
-	K = 50/4.
-
-	mode = 1  # mode to bound
+def solve_lp(G, init, T, K, mode, verbosity = 0):
 
 	A,B = lin_syst(G)
-
-	n = A.shape[1]
-	m = B.shape[1]
-	n_v = len(G)
-
-	maxmode = n / n_v
+	maxmode = __maxmode(G)
+	N = A.shape[1]
 
 	tree_roots = np.nonzero(A.diagonal())[0] # index of nonzero elements
 	tree_roots_graph = tree_roots - np.array([i * len(G) for i in range(maxmode)])
@@ -82,102 +80,121 @@ def solve_lp(G, init):
 	A_mos = sparse_scipy_to_mosek(A)
 	B_mos = sparse_scipy_to_mosek(B)
 
-	stacked_eye = Matrix.sparse( n_v, n, [ (i % n_v ) for i in range(n)], range(n), np.ones(n))
+	A_d = A.todense()
+	B_d = B.todense()
+	stacked_e = sparse_scipy_to_mosek(stacked_eye(G))
 
-	# Compute graph cycles
-	with Model() as M: 
+	M = Model("cycle_find") 
 
-		#########################################
-		######### Define variables ##############
-		#########################################
+	#########################################
+	######### Define variables ##############
+	#########################################
 
-		# control variables u(0), ... u(T-1)
-		u_t = [None] * (T)
-		for t in range(T):
-			u_t[t] = M.variable("u[" + str(t) + "]", m, Domain.greaterThan(0.0)) 
+	# control variables u(0), ... u(T-1)
+	u_t = []
+	for t in range(T):
+		u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0))) 
 
-		# state variables x(0), ... x(T)
-		x_t = [None] * (T+1)
-		for t in range(0, T+1):
-			x_t[t] = M.variable("x[" + str(t) + "]", m, Domain.greaterThan(0.0)) 
+	# state variables x(0), ... x(T)
+	x_t = []
+	for t in range(T+1):
+		x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0)))
 
-		# cycle variables	
-		c_i = []
-		alpha_i = []  # cycle assignments
-		Psi_i = []    # matrices cycle -> state
-		k_u_i = []    # upper mode counting bounds
-		k_l_i = []	  # lower mode counting bounds
-		for i, c in enumerate(nx.simple_cycles(G)):
-			if not set(tree_roots_nodes) & set(c):
-				# only care about cycles not involving roots
-				print next(cycle_rows(G,c, mode))
-				c_i.append(c)
-				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
-				Psi_i.append(cycle_indices(c))
-				k_u_i.append(M.variable( 1, Domain.unbounded() ))
-				k_l_i.append(M.variable( 1, Domain.unbounded() ))
+	# cycle variables	
+	c_i = []
+	alpha_i = []  # cycle assignments
+	Psi_i = []    # matrices cycle -> state
+	k_u_i = []    # upper mode counting bounds
+	k_l_i = []	  # lower mode counting bounds
+	for i, c in enumerate(nx.simple_cycles(G)):
+		if not set(tree_roots_nodes) & set(c):
+			# only care about cycles not involving roots
+			c_i.append(c)
+			alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
+			Psi_i.append(sparse_scipy_to_mosek(cycle_indices(G, c) ))
+			k_u_i.append(M.variable( 1, Domain.unbounded() ))
+			k_l_i.append(M.variable( 1, Domain.unbounded() ))
 
-		# error variables
-		err = M.variable("error", 1, Domain.greaterThan(0.))
+	# error variables
+	k_u = M.variable(1, Domain.unbounded())
+	k_l = M.variable(1, Domain.unbounded())
+	err = M.variable("error", 1, Domain.greaterThan(0.))
 
-		#########################################
-		######### Define constraints ############
-		#########################################
+	#########################################
+	######### Define constraints ############
+	#########################################
 
-		# Constraint at t=0
-		M.constraint( Expr.mul(stacked_eye, x_t[0]), Domain.equalsTo(init))
-		
-		# Dynamics constraints
-		for t in range(1, T+1):
-			M.constraint( Expr.sub(x_t[t], Expr.add(Expr.mul(A_mos, x_t[t-1]), Expr.mul(B_mos, u_t[t-1])) ), Domain.equalsTo(0.))
-			# TODO: TRANSIENT CONSTRAINTS
+	# Constraint at t=0
+	M.constraint( Expr.mul(stacked_e, x_t[0]), Domain.equalsTo([float(i) for i in init]))
+	
+	# Dynamics constraints
+	mat = Matrix.sparse(1, N, [0 for i in range(len(G))], [(mode - 1)*len(G) + i for i in range(len(G))], [1. for i in range(len(G))])
+	for t in range(1, T+1):
+		M.constraint("dyn t=" + str(t), Expr.sub(x_t[t], Expr.add(Expr.mul(A_mos, x_t[t-1]), Expr.mul(B_mos, u_t[t-1])) ), Domain.equalsTo(0.))
 
-		# Control constraints
-		for t in range(T):
-			M.constraint( Expr.sub(x_t[t], u_t[t]), Domain.greaterThan(0.) )
+	# Mode-counting during transient phase
+	for t in range(T+1):
+		M.constraint( Expr.sub( k_u, Expr.mul(mat, x_t[t])), Domain.greaterThan(0.) )
+		M.constraint( Expr.sub( Expr.mul(mat, x_t[t]), k_l), Domain.greaterThan(0.) )
 
-		# Equality at time T
-		Psi_stacked = Matrix.sparse([Psi_i])
-		alpha_stacked = Expr.vstack([alpha.asExpr() for alpha in alpha_i])
-		M.constraint( Expr.sub(Expr.mul(Psi_stacked, alpha_stacked), Expr.mul(stacked_eye, x_t[T])), Domain.equalsTo(0.) )
+	# Control constraints
+	for t in range(T):
+		M.constraint( Expr.sub(x_t[t], u_t[t]), Domain.greaterThan(0.) )
 
-		# Bound assignments in [k_l_i[i], k_u_i[i]]
-		for i, c in enumerate(c_i):
-			Ac = DenseMatrix(np.array(cycle_matrix(G, c, mode), dtype=float) )
-			M.constraint( Expr.sub(Expr.mul(Ac, alpha_i[i]), Expr.mul(k_l_i[i], [1. for j in range(len(c))]) ), Domain.greaterThan(0.) )
-			M.constraint( Expr.sub(Expr.mul(k_u_i[i], [1. for j in range(len(c))]), Expr.mul(Ac, alpha_i[i]) ), Domain.greaterThan(0.) )
+	# Equality at time T
+	Psi_stacked = Matrix.sparse([Psi_i])
+	alpha_stacked = Expr.vstack([alpha.asExpr() for alpha in alpha_i])
+	M.constraint( Expr.sub(Expr.mul(Psi_stacked, alpha_stacked), Expr.mul(stacked_e, x_t[T])), Domain.equalsTo(0.) )
 
-		# Set \sum k_l_i[i] <= K <= \sum k_u_i[i] 
-		k_u_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_u_i]) )
-		k_l_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_l_i]) )
- 		M.constraint( Expr.sub(err, Expr.sub( k_u_sum, K ) ), Domain.greaterThan(0.) )
- 		M.constraint( Expr.sub(err, Expr.sub( K, k_l_sum ) ), Domain.greaterThan(0.) )
+	# Bound assignments in [k_l_i[i], k_u_i[i]]
+	for i, c in enumerate(c_i):
+		Ac = DenseMatrix(np.array(cycle_matrix(G, c, mode), dtype=float) )
+		M.constraint( Expr.sub(Expr.mul(Ac, alpha_i[i]), Expr.mul(k_l_i[i], [1. for j in range(len(c))]) ), Domain.greaterThan(0.) )
+		M.constraint( Expr.sub(Expr.mul(k_u_i[i], [1. for j in range(len(c))]), Expr.mul(Ac, alpha_i[i]) ), Domain.greaterThan(0.) )
 
-		M.objective(ObjectiveSense.Minimize, err)
+	# Set \sum k_l_i[i] <= K <= \sum k_u_i[i] 
+	k_u_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_u_i]) )
+	k_l_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_l_i]) )
+	M.constraint( Expr.sub( k_u, k_u_sum ), Domain.greaterThan(0.) )
+	M.constraint( Expr.sub( k_l_sum, k_l ), Domain.greaterThan(0.) )
 
-		# Enable logger output
-		M.setLogHandler(sys.stdout) 
+	M.constraint( Expr.sub(err, Expr.sub(k_u, float(K))), Domain.greaterThan(0.) )
+	M.constraint( Expr.sub(err, Expr.sub(float(K), k_l)), Domain.greaterThan(0.) )
 
-		M.solve()
+	M.objective(ObjectiveSense.Minimize, err)
 
+	# Enable logger output
+	# M.setLogHandler(sys.stdout) 
+
+	M.solve()
+
+	if verbosity:
+		print ""
 		print "Primal solution status: ", M.getPrimalSolutionStatus()  
 		print "Dual solution status: ", M.getDualSolutionStatus()  
-
+		print ""
 		print "Error: ", err.level()[0]
 		print "Guaranteed interval: [", K-err.level()[0], ", ", K+err.level()[0], "]"
 		print ""
-		print "Cycles:"
-		for i, alpha in enumerate(alpha_i):
-			if sum(alpha.level()) > 1e-5:
+		print "### Cycles ###"
+
+	final_c = []
+	final_a = []
+	for i, alpha in enumerate(alpha_i):
+		if sum(alpha.level()) > 1e-5:
+			if verbosity:
+				print "Cycle: ", c_i[i]
 				print "Cycle mode-count: ", next(cycle_rows(G,c_i[i], mode))
 				print "Cycle length: ", len(alpha.level())
 				print "Assignment: ", alpha.level()
+			final_c.append(c_i[i])
+			final_a.append(alpha.level())
 
-		conn_com = max(nx.strongly_connected_components(G), key=len)
-		conn_com_ind = [G.nodes().index(i) for i in conn_com]
-		for t in range(T+1):
-			print sum(x_t[t].level())
-			print sum_modes(x_t[t].level(), 2)[conn_com_ind]
+	for t in range(1,T+1):
+		# check that sol obeys dynamics up to time T
+		assert(np.all(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()) <= 1e-10))
+
+	return [x_t[t].level() for t in range(T+1)], [u_t[t].level() for t in range(T)], final_c, final_a
 
 def cycle_matrix(G, cycle, mode):
 	return [row for row in cycle_rows(G, cycle, mode)]
@@ -358,7 +375,7 @@ def simple_graph():
 def sum_modes(state, maxmode):
 	return np.sum([state[ i * len(state)/maxmode : (i+1) * len(state)/maxmode] for i in range(maxmode)], axis=0)
 
-def simulate(G, nodelist, init):
+def simulate(G, nodelist, init, u_finite, cycles, assignments):
 
 	# Construct subgraph we want to plot
 	subgraph = G.subgraph(nodelist)
@@ -368,79 +385,147 @@ def simulate(G, nodelist, init):
 	fig = plt.figure()
 	ax = fig.gca()
 
-	# Plot edges
-	maxmode = max([d['mode'] for (u,v,d) in  G.edges(data=True)])
-
 	# Get linear system description
 	A,B = lin_syst(G)
-
-	assert(maxmode * G.number_of_nodes() == A.shape[1])
+	maxmode = __maxmode(G)
 
 	# feedback
-	tree_roots = np.nonzero(A.diagonal())[0] # index of nonzero elements
-	tree_roots_graph = tree_roots - np.array([i * len(G) for i in range(maxmode)])
-	def u(state):
-		u = np.zeros(len(state))
-		u[tree_roots] = state[tree_roots]
-		return u
+	controls = CycleControl(G, u_finite, cycles, assignments)
 
 	# Pre-compute plotting data
-	tmax = 20
-	xvec = np.zeros([len(init), tmax], dtype=float)
+	tmax = 30
+	xvec = np.zeros([len(init), tmax+1], dtype=float)
 	xvec[:,0] = init
-	for t in range(1,tmax):
-		xvec[:,t] = A.dot(xvec[:,t-1]) + B.dot(u(xvec[:, t-1]))
-
+	for t in range(0,tmax):
+		u = controls.get_u(t, xvec[:,t])
+		xvec[:,t+1] = A.dot(xvec[:,t]) + B.dot(u)
 
 	#################################
 	######### PLOT THE GRAPH ########
 	#################################
 	pos = nx.spring_layout(subgraph)
 
+	time_template = 'time = %d'
+	time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
+	mode_template = 'mode count = %d'
+
 	# Plot edges
 	edgelists = [ [(u,v) for (u,v,d) in subgraph.edges(data=True) if d['mode'] == mode ]  for mode in range(1, maxmode+1)]
 	colors = iter(plt.cm.rainbow(np.linspace(0,1,len(edgelists))))
+	mode_text = []
 	for i, edgelist in enumerate(edgelists):
-		nx.draw_networkx_edges(subgraph, pos, ax=ax, edgelist = edgelist, edge_color = [next(colors)] * len(edgelist))
+		col = next(colors)
+		nx.draw_networkx_edges(subgraph, pos, ax=ax, edgelist = edgelist, edge_color = [col] * len(edgelist))
+		mode_text.append(ax.text(0.35 + i*0.35, 0.9, '', transform=ax.transAxes, color = col))
+
+	tree_roots = np.nonzero(A.diagonal())[0] # index of nonzero elements
+	tree_roots_graph = tree_roots - np.array([i * len(G) for i in range(maxmode)])
 
 	# Plot initial set of nodes
 	node_size = 300 * np.ones(len(subgraph_indices))
 	for idx in tree_roots_graph:
 		node_size[subgraph_indices.index(idx)] = 600
 
+	# nx.draw_networkx_labels(subgraph, pos, ax=ax)
+	
 	nod = nx.draw_networkx_nodes(subgraph, pos, ax=ax, node_size = node_size )
 
+	pts = [ (v, subgraph[v][w]['mode'], plt.plot((pos[v][0] + pos[w][0])/2, (pos[v][1] + pos[w][1])/2, marker='o', color = 'w', markersize=20) ) for v,w in subgraph.edges_iter()]
 
 	# Function that updates node colors
 	def update(i):
-		norm = mpl.colors.Normalize(vmin=0, vmax=np.max(xvec[:,i]))
+		x_i = xvec[:,i]
+		norm = mpl.colors.Normalize(vmin=0, vmax=np.max(x_i))
 		cmap = plt.cm.Blues
 		m = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-		nod.set_facecolors(m.to_rgba(sum_modes(xvec[:,i], maxmode)[subgraph_indices] ))
-		return nod
+		nod.set_facecolors(m.to_rgba(sum_modes(x_i, maxmode)[subgraph_indices] ))
+		time_text.set_text(time_template % i)
+		for j, mt in enumerate(mode_text):
+			mt.set_text(mode_template % sum(xvec[range(len(G)*j, len(G)*(j+1) ), i]))
+		for v, edge_mode, edge_marker in pts:
+			i = G.nodes().index(v)
+			edge_marker.set_facecolors( m.to_rgba( x_i[ len(G) * (edge_mode-1) + i] ) )
+
+		return nod, time_text, mode_text
 
 	ani = animation.FuncAnimation(fig, update, tmax, interval=1000, blit=False)
-	ani.save('anim_output.mp4', fps=1)
+	ani.save('anim_output.mp4', fps=2)
 
 	plt.show()
 
+class CycleControl():
+	"""docstring for CycleControl"""
+	def __init__(self, G, u_list, c_list, alpha_list):
+		self.G = G
+		self.u_list = u_list
+		self.c_list = c_list
+		self.alpha_list = [deque(a) for a in alpha_list]
+
+		self.A, self.B = lin_syst(G)
+		self.stacked_e = stacked_eye(G)
+
+	def get_u(self, t, state):
+		
+		if t < len(self.u_list):
+			return np.array(self.u_list[t])
+
+		# compute desired next state
+		for a in self.alpha_list: a.rotate()
+		
+		# solve linear system to find control
+		sum_next = np.sum([cycle_indices(self.G, c).dot( a ) for c,a in zip(self.c_list, self.alpha_list)], 0)
+		b_lin = sum_next - self.stacked_e.dot(self.A.dot( state ) )
+		A_lin = self.stacked_e.dot( self.B )
+	
+		M = Model()
+		u = M.variable(self.B.shape[1], Domain.greaterThan(0.))
+		M.constraint( Expr.sub(state, u), Domain.greaterThan(0.))
+		M.constraint( Expr.sub( Expr.mul(sparse_scipy_to_mosek(A_lin), u), list(b_lin)), Domain.equalsTo(0.) )
+		M.solve()
+		
+		return np.array(u.level())
+
 def main():
-	# ab = example_abstr()
-	# G = ab.graph
 
-	G = simple_graph()
+	# "prettyprinting"
+	np.set_printoptions(precision=2, suppress=True)
 
+	# Obtain a graph
+	ab = example_abstr()
+	G = ab.graph
+
+	# Find a "random" initial state
 	init = np.zeros(len(G))
+	np.random.seed(1)
 	for i in np.random.randint( len(G), size=50):
 		init[i] += 1
 
-	print "initial sum", sum(init)
+	# Solve LP
+	T = 5
+	Kdes = 37.
+	mode = 1
+	states, u_finite, cycles, alphas = solve_lp(G, init, T, Kdes, mode, verbosity = 1)
 
-	solve_lp(G, init)
+	# Verify that controls are reasonable
+	cont = CycleControl(G, u_finite, cycles, alphas)
 
+	A,B = lin_syst(G)
+	x = states[0]
+
+	for t in range(0,15):
+		u = cont.get_u(t, x)
+		try:
+			assert(min(u) >= -1e-10)
+			assert(min(x-u) >= -1e-10)
+		except Exception, e:
+			print "failed assert for t = ", t, " : ", min(u), min(x-u)
+			print "x = ", u, "\n"
+			print "u = ", u, "\n"
+		x = A.dot(x) + B.dot(u)
+
+	# Simulate the stuff
 	sg = G.subgraph(max(nx.strongly_connected_components(G), key=len))
-
-	draw_modes(sg)
+	simulate(G, sg.nodes(), states[0], u_finite, cycles, alphas)
 	plt.show()
 
 if __name__ == '__main__':

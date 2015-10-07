@@ -4,7 +4,8 @@ import numpy as np
 import networkx as nx
 import scipy.linalg
 
-from treeabstr import midx_to_idx, idx_to_midx, Abstraction, lin_syst, cycle_rows, cycle_matrix, sum_modes
+from treeabstr import midx_to_idx, idx_to_midx, Abstraction, lin_syst, cycle_rows, cycle_matrix, sum_modes, cycle_indices, \
+					  simple_graph, solve_lp
 
 class treeabstrTests(unittest.TestCase):
 
@@ -70,6 +71,28 @@ class treeabstrTests(unittest.TestCase):
 		state = [1,1,1,0,2,0,4,5,6]
 		a = sum_modes(state, 3)
 		self.assertTrue(np.all(a == [5,8,7]))
+
+	def test_cycle_indices(self):
+		g = nx.DiGraph()
+		g.add_nodes_from([1,2,3,4,5,6])
+		g.add_path([2,3,4,5,2])
+
+		ci = cycle_indices(g, [2,3,4,5]).todense()
+		self.assertTrue(np.all(ci == np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0,0,0,0]]) ))
+
+	def test_solve_lp(self):
+		G = simple_graph()
+
+		T = 5
+		Kdes = 13.
+		mode = 1
+		init = [ 5,  9,  4,  3,  8,  7,  6,  8]
+		states, u_finite, cycles, alphas = solve_lp(G, init, T, Kdes, mode)
+
+		self.assertEquals(len(cycles), 2)
+		self.assertEquals(set(cycles[0]), set([2,6,3,7]))
+		self.assertEquals(set(cycles[1]), set([3,6,5,4]))
+		
 
 
 if __name__ == '__main__':
