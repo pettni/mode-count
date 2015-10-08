@@ -1,4 +1,4 @@
-# modecount
+# mode-count
 
 Python toolbox for abstraction and controller synthesis for mode-counting objectives
 
@@ -15,6 +15,12 @@ Working Python environment, with
 ```
 python example_simple.py
 python example_abstraction_lin2d.py
+```
+
+## Run code tests
+
+```
+python test_mode-count.py
 ```
 
 ## Code overview
