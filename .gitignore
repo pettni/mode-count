@@ -55,4 +55,6 @@ docs/_build/
 
 # PyBuilder
 target/
-.mp4
+
+# hide video files
+*.mp4
