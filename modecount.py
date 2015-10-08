@@ -68,7 +68,7 @@ class Abstraction(object):
 
 	def get_midx_pt(self, pt):
 		""" 
-			Return the discret multiindex corresponding to a given continuous point
+			Return the discrete multiindex corresponding to a given continuous point
 		"""
 		assert(len(pt) == len(self.n_dim))
 		if not self.contains(pt):

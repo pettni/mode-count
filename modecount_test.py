@@ -4,10 +4,10 @@ import numpy as np
 import networkx as nx
 import scipy.linalg
 
-from treeabstr import Abstraction, lin_syst, _cycle_rows, _cycle_matrix, _sum_modes, _cycle_indices, \
+from modecount import Abstraction, lin_syst, _cycle_rows, _cycle_matrix, _sum_modes, _cycle_indices, \
 					  synthesize
 
-class treeabstrTests(unittest.TestCase):
+class modecountTests(unittest.TestCase):
 
 	def test_abstraction(self):
 		ab = Abstraction([-1, -1], [1, 1], 1, 1, 1)

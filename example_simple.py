@@ -5,7 +5,7 @@ Example illustrating mode-counting synthesis on a manually defined graph.
 import networkx as nx
 import matplotlib.pyplot as plt 
 
-from treeabstr import *
+from modecount import *
 
 # Define a simple graph
 G = nx.DiGraph()

@@ -5,7 +5,7 @@ Example illustrating abstracting a 2-mode switched system, and mode-counting syn
 import networkx as nx
 import matplotlib.pyplot as plt
 
-from treeabstr import *
+from modecount import *
 
 # Define an abstraction
 data = {}
