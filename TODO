@@ -1,0 +1,5 @@
+- Must implement "clever" cycle selection for problems with large graphs
+
+- Change method for finding input (should not be necessary to solve a LP)
+
+- Add docstrings
