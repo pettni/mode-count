@@ -54,7 +54,7 @@ class Abstraction(object):
 		self.nextMode = 1
 
 		# number of discrete points along each dimension
-		self.n_dim = np.round((self.ub - self.lb)/eta).astype(np.uint64)
+		self.n_dim = np.round((self.ub - self.lb)/eta).astype(int)
 
 		# Create a graph and populate it with nodes
 		self.graph = nx.DiGraph()
@@ -62,6 +62,9 @@ class Abstraction(object):
 			cell_lb = self.lb + np.array(midx) * eta
 			cell_ub = cell_lb + eta
 			self.graph.add_node(midx, lb = tuple(cell_lb), ub = tuple(cell_ub), mid = (cell_lb + cell_ub) / 2)
+
+	def __len__(self):
+		return len(self.graph)
 
 	def get_midx_pt(self, pt):
 		""" 
@@ -112,17 +115,36 @@ class Abstraction(object):
 	def verify_bisim(self, beta, eps):
 		return (beta(eps, self.tau) + self.eta/2 <= eps)
 
+	def node_to_idx(self, node):
+		# Given a node index (x1,x2,x3, ...),
+		# return the list index on the form
+		#
+		#   Lz ( Ly (x) + y ) + z
+		# 
+		assert len(node) == len(self.n_dim)
+		ret = node[0]
+		for i in range(1,len(self.n_dim)):
+			ret *= self.n_dim[i]
+			ret += node[i]
+		return ret
+
+	def idx_to_node(self, idx):
+		# Inverse to node_to_idx
+		assert(idx < np.product(self.n_dim))
+		node = [0] * len(self.n_dim)
+		for i in reversed(range(len(self.n_dim))):
+			node[i] = int(idx % self.n_dim[i])
+			idx = np.floor(idx / self.n_dim[i])
+		return tuple(node)
+
 class CycleControl():
 	def __init__(self, G, sol):
 		self.G = G
 		self.u_list = sol['controls']
 		self.c_list = sol['cycles']
 		self.alpha_list = [deque(a) for a in sol['assignments']]
-
 		self.A, self.B = lin_syst(G)
 		self.stacked_e = _stacked_eye(G)
-
-		# self.ss_lowerb = np.sum([_psi_lower(self.G, self.c_list, self.alpha_list, )])
 
 	def get_u(self, t, state):
 		
@@ -163,13 +185,18 @@ def draw_modes(G):
 		nx.draw_networkx_edges(G, pos, edgelist = edgelist, edge_color = [next(colors)] * len(edgelist))
 	nx.draw_networkx_labels(G,pos)
 
-def lin_syst(G):
+def lin_syst(G, order_fcn = None):
 	""" 
 		Return matrices A,B such that
 		[w_1(t+1); w_2(t+1); ...] = A [w_1(t); w_2(t); ...] + B [r_1(t); r_2(t); ...]
 		for modes 1, 2 ...
 	"""
-	T = nx.adjacency_matrix(G, weight='mode').transpose()
+	if order_fcn == None:
+		order_fcn = lambda v : G.nodes().index(v)
+
+	ordering = sorted(G.nodes_iter(), key = order_fcn)
+
+	T = nx.adjacency_matrix(G, nodelist = ordering, weight='mode').transpose()
 	T_list = [ T == mode for mode in range(1, _maxmode(G)+1) ]
 
 	A = scipy.sparse.block_diag(tuple(T_list), dtype=np.int8)	
@@ -177,9 +204,13 @@ def lin_syst(G):
 
 	return A,B
 
-def synthesize(G, init, T, K, mode, forbidden_nodes = [], verbosity = 0):
+def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verbosity = 0):
 
-	A,B = lin_syst(G)
+	if order_fcn == None:
+		nodelist = G.nodes()
+		order_fcn = lambda v : nodelist.index(v)
+
+	A,B = lin_syst(G, order_fcn)
 	maxmode = _maxmode(G)
 	N = A.shape[1]
 
@@ -213,11 +244,13 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], verbosity = 0):
 	k_u_i = []    # upper mode counting bounds
 	k_l_i = []	  # lower mode counting bounds
 	for i, c in enumerate(nx.simple_cycles(G)):
+		if i > 100:
+			break
 		if not set(forbidden_nodes) & set(c):
 			# only care about cycles not involving roots
 			c_i.append(c)
 			alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
-			Psi_i.append(_sparse_scipy_to_mosek(_cycle_indices(G, c) ))
+			Psi_i.append(_sparse_scipy_to_mosek(_cycle_indices(G, c, order_fcn) ))
 			k_u_i.append(M.variable( 1, Domain.unbounded() ))
 			k_l_i.append(M.variable( 1, Domain.unbounded() ))
 
@@ -246,7 +279,7 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], verbosity = 0):
 		# don't enter forbidden nodes
 		for root in forbidden_nodes:
 			for m in range(1, maxmode+1):
-				M.constraint( x_t[t].index(_stateind(G, root, m)), Domain.equalsTo(0.) )
+				M.constraint( x_t[t].index(_stateind(G, root, m, order_fcn)), Domain.equalsTo(0.) )
 
 	# Control constraints
 	for t in range(T):
@@ -260,7 +293,7 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], verbosity = 0):
 
 	# Bound assignments in [k_l_i[i], k_u_i[i]]
 	for i, c in enumerate(c_i):
-		Ac = DenseMatrix(np.array(_cycle_matrix(G, c, mode), dtype=float) )
+		Ac = DenseMatrix( _cycle_matrix(G, c, mode) )
 		M.constraint( Expr.sub(Expr.mul(Ac, alpha_i[i]), Expr.mul(k_l_i[i], [1. for j in range(len(c))]) ), Domain.greaterThan(0.) )
 		M.constraint( Expr.sub(Expr.mul(k_u_i[i], [1. for j in range(len(c))]), Expr.mul(Ac, alpha_i[i]) ), Domain.greaterThan(0.) )
 
@@ -320,12 +353,15 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], verbosity = 0):
 
 def simulate(G, sol, nodelist = []):
 
+	# could change this!
+	order_fcn = lambda v: G.nodes().index(v)
+
 	if len(nodelist) == 0:
 		nodelist = G.nodes()
 
 	# Construct subgraph we want to plot
 	subgraph = G.subgraph(nodelist)
-	subgraph_indices = [(G.nodes()).index(node) for node in subgraph.nodes()]
+	subgraph_indices = [order_fcn(node) for node in subgraph.nodes()]
 
 	# Initiate plot
 	fig = plt.figure()
@@ -372,7 +408,7 @@ def simulate(G, sol, nodelist = []):
 	# Plot initial set of nodes
 	node_size = 300 * np.ones(len(subgraph_indices))
 	for node in sol['forbidden_nodes']:
-		node_size[node] = 600
+		node_size[subgraph.nodes().index(node)] = 600
 
 	# nx.draw_networkx_labels(subgraph, pos, ax=ax)
 	
@@ -418,13 +454,16 @@ def _stacked_eye(G):
 	n = len(G) * _maxmode(G)
 	return scipy.sparse.coo_matrix( (np.ones(n), ([ (i % n_v ) for i in range(n)], range(n) )), shape = (n_v, n) )
 
-def _cycle_indices(G, ci):
+def _cycle_indices(G, ci, order_fcn = None):
 	"""
 		Return matrix Psi_i s.t.
 			Psi_i alpha_i
-		is a vector with respect to G.nodes() 
+		is a vector with respect to ordering
 	"""
-	row_idx = [G.nodes().index(v) for v in ci]
+	if order_fcn == None:
+		nodelist = G.nodes()
+		order_fcn = lambda v : nodelist.index(v)
+	row_idx = [order_fcn(v) for v in ci]
 	col_idx = range(len(ci))
 	vals = np.ones(len(ci))
 	return scipy.sparse.coo_matrix((vals, (row_idx, col_idx)), shape = (len(G), len(ci)) )
@@ -436,8 +475,11 @@ def _sparse_scipy_to_mosek(A):
 def _maxmode(G):
 	return max([d['mode'] for (u,v,d) in  G.edges(data=True)])
 
-def _stateind(G, node, mode):
-	return (mode - 1) * len(G) + G.nodes().index(node)
+def _stateind(G, node, mode, order_fcn = None):
+	if order_fcn == None:
+		nodelist = G.nodes()
+		order_fcn = lambda v : nodelist.index(v)
+	return (mode - 1) * len(G) + order_fcn(node)
 
 def _cycle_matrix(G, cycle, mode):
 	return [row for row in _cycle_rows(G, cycle, mode)]
@@ -451,7 +493,7 @@ def _cycle_rows(G, C, mode):
 	for i in range(len(C)):
 		v1 = C[i]
 		v2 = C[(i+1) % len(C)]
-		d.append(1 if G[v1][v2]['mode'] == mode else 0)
+		d.append(1. if G[v1][v2]['mode'] == mode else 0.)
 	for i in range(len(C)):
 		yield list(d)
 		d.rotate(-1)

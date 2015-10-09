@@ -32,8 +32,8 @@ ab = Abstraction(lb, ub, eta, tau)
 
 # Verify that abstraction is 0.3-approximate bisimulation
 # with respect to both KL functions
-assert(ab.verify_bisim(kl1), 0.3)
-assert(ab.verify_bisim(kl2), 0.3)
+assert(ab.verify_bisim(kl1, 0.3))
+assert(ab.verify_bisim(kl2, 0.3))
 
 # add modes to abstraction
 ab.add_mode(vf1)
@@ -55,7 +55,7 @@ mode = 1		# mode to count (1 or 2)
 forbidden_nodes = G.nodes_with_selfloops()
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, verbosity = 0)
+mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, order_fcn = ab.node_to_idx, verbosity = 0)
 
 # simulate it on the connected subset of the graph!
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))

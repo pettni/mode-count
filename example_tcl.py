@@ -34,17 +34,17 @@ kl2 = lambda r,s : r * np.exp(-s*a)
 # Abstraction parameters
 lb = [theta_r - delta]		# lower bounds
 ub = [theta_r + delta]		# upper bounds
-eta = 0.05					# space discretization
-tau = 0.05					# time discretization
-eps = 0.5					# desired bisimulation approximation
+eta = 0.0005					# space discretization
+tau = 0.016					# time discretization
+eps = 0.1					# desired bisimulation approximation
 
 # Initiate abstraction
 ab = Abstraction(lb, ub, eta, tau)
 
 # Verify that abstraction is eps-approximate bisimulation
 # with respect to both KL functions
-# assert(ab.verify_bisim(kl1, eps))
-# assert(ab.verify_bisim(kl2, eps))
+assert(ab.verify_bisim(kl1, eps))
+assert(ab.verify_bisim(kl2, eps))
 # 
 # add modes to abstraction
 ab.add_mode(vf1)
@@ -52,8 +52,8 @@ ab.add_mode(vf2)
 
 # extract abstraction graph
 G = ab.graph
-draw_modes(G)
-plt.show()
+# draw_modes(G)
+# plt.show()
 
 # randomize an initial condition
 init = np.zeros(len(G))

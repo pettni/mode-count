@@ -11,15 +11,35 @@ class modecountTests(unittest.TestCase):
 
 	def test_abstraction(self):
 		ab = Abstraction([-1, -1], [1, 1], 1, 1)
-		self.assertEquals(len(ab.graph), 9)
+		self.assertEquals(len(ab), 4)
 
 		c1 = ab.get_midx_pt((0.2, 0.2))
-		self.assertEquals(ab.graph.node[c1]['lb'], (-0.5,-0.5))
-		self.assertEquals(ab.graph.node[c1]['ub'], (0.5,0.5))
+		self.assertEquals(ab.graph.node[c1]['lb'], (0.,0.))
+		self.assertEquals(ab.graph.node[c1]['ub'], (1.,1.))
 
 		c2 = ab.get_midx_pt((0.2, -0.7))
-		self.assertEquals(ab.graph.node[c2]['lb'], (-0.5,-1.5))
-		self.assertEquals(ab.graph.node[c2]['ub'], (0.5,-0.5))
+		self.assertEquals(ab.graph.node[c2]['lb'], (0.,-1))
+		self.assertEquals(ab.graph.node[c2]['ub'], (1,0))
+
+	def test_ordering(self):
+		ab = Abstraction([0, 0], [5, 4], 1, 1)
+
+		for i in range(5):
+			for j in range(4):
+				self.assertEquals(ab.node_to_idx( (i,j) ), 4*i+j)
+				self.assertEquals(ab.idx_to_node(ab.node_to_idx((i,j))), (i,j))
+
+		ab = Abstraction([0, 0, 0], [5, 4, 3], 1, 1)
+		for i in range(5):
+			for j in range(4):
+				for k in range(3):
+					self.assertEquals(ab.node_to_idx((i,j,k)), 3*(4*i+j) + k)
+					self.assertEquals(ab.idx_to_node(ab.node_to_idx((i,j,k))), (i,j,k))
+
+		ordering = sorted(ab.graph.nodes_iter(), key = ab.node_to_idx)
+		assert(len(ordering) == len(ab))
+		for i,node in enumerate(ordering):
+			self.assertEquals( ab.idx_to_node(i), node )
 
 	def test_lin_syst(self):
 		g = nx.DiGraph()
@@ -69,7 +89,7 @@ class modecountTests(unittest.TestCase):
 		ci = _cycle_indices(g, [2,3,4,5]).todense()
 		self.assertTrue(np.all(ci == np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0,0,0,0]]) ))
 
-	def test_solve_lp(self):
+	def test_synthesize(self):
 		G = nx.DiGraph()
 		G.add_nodes_from([1,2,3,4,5,6,7,8])
 
