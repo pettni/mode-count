@@ -5,12 +5,12 @@ import networkx as nx
 import scipy.linalg
 
 from modecount import Abstraction, lin_syst, _cycle_rows, _cycle_matrix, _sum_modes, _cycle_indices, \
-					  synthesize
+					  synthesize, _psi_lower, _psi_upper
 
 class modecountTests(unittest.TestCase):
 
 	def test_abstraction(self):
-		ab = Abstraction([-1, -1], [1, 1], 1, 1, 1)
+		ab = Abstraction([-1, -1], [1, 1], 1, 1)
 		self.assertEquals(len(ab.graph), 9)
 
 		c1 = ab.get_midx_pt((0.2, 0.2))
@@ -90,13 +90,30 @@ class modecountTests(unittest.TestCase):
 		Kdes = 16.
 		mode = 1
 		init = [0, 1, 6, 4, 7, 10, 2, 0]
-		sol = synthesize(G, init, T, Kdes, mode)
+		sol = synthesize(G, init, T, Kdes, mode, forbidden_nodes = [1,8], verbosity = 0)
 
 		cycles = sorted(sol['cycles'], key=len)
 
 		self.assertEquals(len(cycles), 2)
 		self.assertEquals(set(cycles[0]), set([4,6,5]))
 		self.assertEquals(set(cycles[1]), set([3,6,5,4]))
+
+	def test_psi(self):
+		g = nx.DiGraph()
+		g.add_nodes_from([1,2,3])
+		g.add_path([2,1], mode=1)
+		g.add_path([3,1], mode=1)
+		g.add_path([1,2,3], mode=2)
+
+		c = [1,2,3]
+		a = [2,0,2]
+		self.assertEquals(_psi_lower(g, c, a, 2), 2)
+		self.assertEquals(_psi_upper(g, c, a, 2), 4)
+
+		c = [1,2]
+		a = [1,2]
+		self.assertEquals(_psi_lower(g, c, a, 2), 1)
+		self.assertEquals(_psi_upper(g, c, a, 2), 2)
 
 if __name__ == '__main__':
 	unittest.main()

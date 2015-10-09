@@ -29,8 +29,10 @@ T = 5 			# horizon
 mode_des = 19	# desired mode count over time
 mode = 1		# mode to count (1 or 2)
 
+forbidden_nodes = G.nodes_with_selfloops()
+
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, verbosity = 0)
+mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, verbosity = 0)
 
 # simulate it on the graph!
 anim = simulate(G, mc_sol)

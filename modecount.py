@@ -24,8 +24,6 @@ from collections import deque
 
 import numpy as np
 
-from numpy.linalg import norm
-from scipy.linalg import expm
 import scipy.integrate
 import scipy.sparse
 import random
@@ -45,10 +43,9 @@ class Abstraction(object):
 	""" 
 		Abstraction built on top of a networkx DiGraph
 	"""
-	def __init__(self, lb, ub, eta, tau, eps):
+	def __init__(self, lb, ub, eta, tau):
 		self.eta = eta
 		self.tau = tau
-		self.eps = eps
 
 		self.lb = np.array(lb, dtype=np.float64)
 		self.lb -= (self.lb + float(eta)/2) % eta  # make sure that zero is in middle of cell
@@ -97,14 +94,14 @@ class Abstraction(object):
 
 		plt.show()
 
-	def add_mode(self, vf, tau):
+	def add_mode(self, vf):
 		"""
 			Add new dynamic mode to the abstraction, given by
-			the vector field vf and discretization tau
+			the vector field vf 
 		"""
 		dummy_vf = lambda z,t : vf(z)
 		for node, attr in self.graph.nodes_iter(data=True):
-			x_fin = scipy.integrate.odeint(dummy_vf, attr['mid'], np.arange(0, tau, tau/100))
+			x_fin = scipy.integrate.odeint(dummy_vf, attr['mid'], np.arange(0, self.tau, self.tau/100))
 			if self.contains(x_fin[-1]):
 				midx = self.get_midx_pt(x_fin[-1])
 				self.graph.add_edge( node, midx, mode = self.nextMode )
@@ -112,8 +109,8 @@ class Abstraction(object):
 				print "Warning: transition from ", attr['mid'], " in mode ", self.nextMode, " goes out of domain"
 		self.nextMode += 1
 
-	def verify_bisim(self, beta):
-		return (beta(self.eps, self.tau) + self.eta/2 <= self.eps)
+	def verify_bisim(self, beta, eps):
+		return (beta(eps, self.tau) + self.eta/2 <= eps)
 
 class CycleControl():
 	def __init__(self, G, sol):
@@ -124,6 +121,8 @@ class CycleControl():
 
 		self.A, self.B = lin_syst(G)
 		self.stacked_e = _stacked_eye(G)
+
+		# self.ss_lowerb = np.sum([_psi_lower(self.G, self.c_list, self.alpha_list, )])
 
 	def get_u(self, t, state):
 		
@@ -142,6 +141,9 @@ class CycleControl():
 		u = M.variable(self.B.shape[1], Domain.greaterThan(0.))
 		M.constraint( Expr.sub(state, u), Domain.greaterThan(0.))
 		M.constraint( Expr.sub( Expr.mul(_sparse_scipy_to_mosek(A_lin), u), list(b_lin)), Domain.equalsTo(0.) )
+
+		M.acceptedSolutionStatus(AccSolutionStatus.Anything)
+
 		M.solve()
 		
 		return np.array(u.level())
@@ -175,18 +177,11 @@ def lin_syst(G):
 
 	return A,B
 
-def synthesize(G, init, T, K, mode, verbosity = 0):
+def synthesize(G, init, T, K, mode, forbidden_nodes = [], verbosity = 0):
 
 	A,B = lin_syst(G)
 	maxmode = _maxmode(G)
 	N = A.shape[1]
-
-	tree_roots = np.nonzero(A.diagonal())[0] # index of nonzero elements (e.g., states with self-loops)
-	tree_roots_graph = tree_roots - np.array([i * len(G) for i in range(maxmode)])
-	tree_roots_nodes = [G.nodes()[k] for k in tree_roots_graph]
-
-	# list of forbidden vertices
-	forbidden_vertices = tree_roots_nodes
 
 	A_mos = _sparse_scipy_to_mosek(A)
 	B_mos = _sparse_scipy_to_mosek(B)
@@ -211,14 +206,14 @@ def synthesize(G, init, T, K, mode, verbosity = 0):
 	for t in range(T+1):
 		x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0)))
 
-	# cycle variables	
+	# cycle variables
 	c_i = []
 	alpha_i = []  # cycle assignments
 	Psi_i = []    # matrices cycle -> state
 	k_u_i = []    # upper mode counting bounds
 	k_l_i = []	  # lower mode counting bounds
 	for i, c in enumerate(nx.simple_cycles(G)):
-		if not set(forbidden_vertices) & set(c):
+		if not set(forbidden_nodes) & set(c):
 			# only care about cycles not involving roots
 			c_i.append(c)
 			alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
@@ -249,7 +244,7 @@ def synthesize(G, init, T, K, mode, verbosity = 0):
 		M.constraint( Expr.sub( Expr.mul(mat, x_t[t]), k_l), Domain.greaterThan(0.) )
 
 		# don't enter forbidden nodes
-		for root in forbidden_vertices:
+		for root in forbidden_nodes:
 			for m in range(1, maxmode+1):
 				M.constraint( x_t[t].index(_stateind(G, root, m)), Domain.equalsTo(0.) )
 
@@ -277,6 +272,9 @@ def synthesize(G, init, T, K, mode, verbosity = 0):
 
 	M.constraint( Expr.sub(err, Expr.sub(k_u, float(K))), Domain.greaterThan(0.) )
 	M.constraint( Expr.sub(err, Expr.sub(float(K), k_l)), Domain.greaterThan(0.) )
+
+	# Make sure number of systems is preserved (i.e. no transitions to out of domain!)
+	M.constraint( Expr.sum(x_t[T]), Domain.equalsTo( float(sum(init)) ) )
 
 	M.objective(ObjectiveSense.Minimize, err)
 
@@ -316,6 +314,8 @@ def synthesize(G, init, T, K, mode, verbosity = 0):
 	sol['controls'] = [u_t[t].level() for t in range(T)]
 	sol['cycles'] = final_c
 	sol['assignments'] = final_a
+	sol['forbidden_nodes'] = forbidden_nodes
+
 	return sol
 
 def simulate(G, sol, nodelist = []):
@@ -358,7 +358,7 @@ def simulate(G, sol, nodelist = []):
 
 	time_template = 'time = %d'
 	time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
-	mode_template = 'mode %d count = %d'
+	mode_template = 'mode %d count = %.1f'
 
 	# Plot edges
 	edgelists = [ [(u,v) for (u,v,d) in subgraph.edges(data=True) if d['mode'] == mode ]  for mode in range(1, maxmode+1)]
@@ -369,13 +369,10 @@ def simulate(G, sol, nodelist = []):
 		nx.draw_networkx_edges(subgraph, pos, ax=ax, edgelist = edgelist, edge_color = [col] * len(edgelist))
 		mode_text.append(ax.text(0.35 + i*0.35, 0.9, '', transform=ax.transAxes, color = col))
 
-	tree_roots = np.nonzero(A.diagonal())[0] # index of nonzero elements
-	tree_roots_graph = tree_roots - np.array([i * len(G) for i in range(maxmode)])
-
 	# Plot initial set of nodes
 	node_size = 300 * np.ones(len(subgraph_indices))
-	for idx in tree_roots_graph:
-		node_size[subgraph_indices.index(idx)] = 600
+	for node in sol['forbidden_nodes']:
+		node_size[node] = 600
 
 	# nx.draw_networkx_labels(subgraph, pos, ax=ax)
 	
@@ -461,3 +458,10 @@ def _cycle_rows(G, C, mode):
 
 def _sum_modes(state, maxmode):
 	return np.sum([state[ i * len(state)/maxmode : (i+1) * len(state)/maxmode] for i in range(maxmode)], axis=0)
+
+
+def _psi_lower(G, cycle, assignment, mode):
+	return np.min([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])
+
+def _psi_upper(G, cycle, assignment, mode):
+	return np.max([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])

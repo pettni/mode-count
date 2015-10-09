@@ -5,6 +5,9 @@ Example illustrating abstracting a 2-mode switched system, and mode-counting syn
 import networkx as nx
 import matplotlib.pyplot as plt
 
+from numpy.linalg import norm
+from scipy.linalg import expm
+
 from modecount import *
 
 # Define an abstraction
@@ -23,19 +26,18 @@ ub = [2, 1]		# upper bounds
 eta = 0.1		# space discretization
 
 tau = 1.1		# time discretization
-eps = 0.3		# desired bisimulation approximation
 
 # Initiate abstraction
-ab = Abstraction(lb, ub, eta, tau, eps)
+ab = Abstraction(lb, ub, eta, tau)
 
-# Verify that abstraction is eps-approximate bisimulation
+# Verify that abstraction is 0.3-approximate bisimulation
 # with respect to both KL functions
-assert(ab.verify_bisim(kl1))
-assert(ab.verify_bisim(kl2))
+assert(ab.verify_bisim(kl1), 0.3)
+assert(ab.verify_bisim(kl2), 0.3)
 
 # add modes to abstraction
-ab.add_mode(vf1, tau)
-ab.add_mode(vf2, tau)
+ab.add_mode(vf1)
+ab.add_mode(vf2)
 
 # extract abstraction graph
 G = ab.graph
@@ -50,9 +52,10 @@ for i in np.random.randint( len(G), size=50):
 T = 10 			# horizon
 mode_des = 28	# desired mode count over time
 mode = 1		# mode to count (1 or 2)
+forbidden_nodes = G.nodes_with_selfloops()
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, verbosity = 1)
+mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, verbosity = 0)
 
 # simulate it on the connected subset of the graph!
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
