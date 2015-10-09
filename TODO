@@ -3,3 +3,5 @@
 - Change method for finding input (should not be necessary to solve a LP)
 
 - Add docstrings
+
+- Profile code and optimize it
