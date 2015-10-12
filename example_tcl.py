@@ -66,8 +66,11 @@ T = 5 			# horizon
 mode_des = 3000	# desired mode count over time
 mode = 1		# mode to count (1 or 2)
 
+order_fcn = ab.node_to_idx
+# order_fcn = G.nodes().index
+
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, verbosity = 1)
+mc_sol = synthesize(G, init, T, mode_des, mode, order_fcn = order_fcn, integer=False, verbosity = 1)
 
 # simulate it on the connected subset of the graph!
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))

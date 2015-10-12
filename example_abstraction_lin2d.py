@@ -13,19 +13,19 @@ from modecount import *
 # Define an abstraction
 data = {}
 # Define a vector fields
-vf1 = lambda x : [-(x[0]-1) + x[1], -(x[0]-1) - x[1]]
-vf2 = lambda x : [-(x[0]+1) + x[1], -(x[0]+1) - x[1]]
+vf1 = lambda x : [-(x[0]-1.05) + x[1], -(x[0]-1.05) - x[1]]
+vf2 = lambda x : [-(x[0]+1.05) + x[1], -(x[0]+1.05) - x[1]]
               
 # Define a KL function beta(r,s) s.t. || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
 kl1 = lambda r,s : r * norm( expm(s*np.array([[-1,  1], [-1, -1]])) , np.inf)
 kl2 = lambda r,s : r * norm( expm(s*np.array([[-1, -1], [ 1, -1]])) , np.inf)
 
 # Abstraction parameters
-lb = [-2, -1]	# lower bounds
-ub = [2, 1]		# upper bounds
-eta = 0.1		# space discretization
-
-tau = 1.1		# time discretization
+lb = [-2, -1.05] # lower bounds
+ub = [2, 1.05]		 # upper bounds
+eta = 0.1		 # space discretization
+ 
+tau = 1.1		 # time discretization
 
 # Initiate abstraction
 ab = Abstraction(lb, ub, eta, tau)
@@ -54,12 +54,15 @@ mode_des = 28	# desired mode count over time
 mode = 1		# mode to count (1 or 2)
 forbidden_nodes = G.nodes_with_selfloops()
 
+# order fcn def
+order_fcn = ab.node_to_idx
+
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, order_fcn = ab.node_to_idx, verbosity = 0)
+mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, order_fcn, verbosity = 0)
 
 # simulate it on the connected subset of the graph!
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
-anim = simulate(G, mc_sol, strongly_conn_nodes)
+anim = simulate(G, mc_sol, order_fcn, strongly_conn_nodes)
 anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
 
 plt.show()

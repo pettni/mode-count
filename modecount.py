@@ -48,7 +48,7 @@ class Abstraction(object):
 		self.tau = tau
 
 		self.lb = np.array(lb, dtype=np.float64)
-		self.lb -= (self.lb + float(eta)/2) % eta  # make sure that zero is in middle of cell
+		# self.lb -= (self.lb + float(eta)/2) % eta  # make sure that zero is in middle of cell
 		self.ub = np.array(ub, dtype=np.float64)
 		self.ub += (self.ub - self.lb) % eta # make domain number of eta's
 		self.nextMode = 1
@@ -116,7 +116,7 @@ class Abstraction(object):
 		return (beta(eps, self.tau) + self.eta/2 <= eps)
 
 	def node_to_idx(self, node):
-		# Given a node index (x1,x2,x3, ...),
+		# Given a node (x1,x2,x3, ...),
 		# return the list index on the form
 		#
 		#   Lz ( Ly (x) + y ) + z
@@ -138,12 +138,13 @@ class Abstraction(object):
 		return tuple(node)
 
 class CycleControl():
-	def __init__(self, G, sol):
+	def __init__(self, G, sol, order_fcn):
 		self.G = G
 		self.u_list = sol['controls']
 		self.c_list = sol['cycles']
 		self.alpha_list = [deque(a) for a in sol['assignments']]
-		self.A, self.B = lin_syst(G)
+		self.order_fcn = order_fcn
+		self.A, self.B = lin_syst(G, order_fcn)
 		self.stacked_e = _stacked_eye(G)
 
 	def get_u(self, t, state):
@@ -155,7 +156,7 @@ class CycleControl():
 		for a in self.alpha_list: a.rotate()
 		
 		# solve linear system to find control
-		sum_next = np.sum([_cycle_indices(self.G, c).dot( a ) for c,a in zip(self.c_list, self.alpha_list)], 0)
+		sum_next = np.sum([_cycle_indices(self.G, c, self.order_fcn).dot( a ) for c,a in zip(self.c_list, self.alpha_list)], 0)
 		b_lin = sum_next - self.stacked_e.dot(self.A.dot( state ) )
 		A_lin = self.stacked_e.dot( self.B )
 	
@@ -204,7 +205,7 @@ def lin_syst(G, order_fcn = None):
 
 	return A,B
 
-def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verbosity = 0):
+def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, integer = True, verbosity = 0):
 
 	if order_fcn == None:
 		nodelist = G.nodes()
@@ -230,12 +231,18 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verb
 	# control variables u(0), ... u(T-1)
 	u_t = []
 	for t in range(T):
-		u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0))) 
+		if integer:
+			u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0), Domain.isInteger())) 
+		else:
+			u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0))) 
 
 	# state variables x(0), ... x(T)
 	x_t = []
 	for t in range(T+1):
-		x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0)))
+		if integer:
+			x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0), Domain.isInteger()))
+		else:
+			x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0)))
 
 	# cycle variables
 	c_i = []
@@ -249,7 +256,10 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verb
 		if not set(forbidden_nodes) & set(c):
 			# only care about cycles not involving roots
 			c_i.append(c)
-			alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
+			if integer:
+				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0), Domain.isInteger()))
+			else:
+				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
 			Psi_i.append(_sparse_scipy_to_mosek(_cycle_indices(G, c, order_fcn) ))
 			k_u_i.append(M.variable( 1, Domain.unbounded() ))
 			k_l_i.append(M.variable( 1, Domain.unbounded() ))
@@ -312,7 +322,8 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verb
 	M.objective(ObjectiveSense.Minimize, err)
 
 	# Enable logger output
-	# M.setLogHandler(sys.stdout) 
+	if verbosity:
+		M.setLogHandler(sys.stdout) 
 
 	M.solve()
 
@@ -340,7 +351,8 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verb
 
 	for t in range(1,T+1):
 		# check that sol obeys dynamics up to time T
-		assert(np.all(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()) <= 1e-10))
+		if (np.all(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()) > 1e-10)):
+			print "Warning, dynamics mismatch for ", np.max(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()))
 
 	sol = {}
 	sol['states'] = [x_t[t].level() for t in range(T+1)]
@@ -351,10 +363,7 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, verb
 
 	return sol
 
-def simulate(G, sol, nodelist = []):
-
-	# could change this!
-	order_fcn = lambda v: G.nodes().index(v)
+def simulate(G, sol, order_fcn, nodelist = []):
 
 	if len(nodelist) == 0:
 		nodelist = G.nodes()
@@ -368,11 +377,11 @@ def simulate(G, sol, nodelist = []):
 	ax = fig.gca()
 
 	# Get linear system description
-	A,B = lin_syst(G)
+	A,B = lin_syst(G, order_fcn)
 	maxmode = _maxmode(G)
 
 	# feedback
-	controls = CycleControl(G, sol)
+	controls = CycleControl(G, sol, order_fcn)
 
 	# Pre-compute plotting data
 	tmax = 30
@@ -408,7 +417,8 @@ def simulate(G, sol, nodelist = []):
 	# Plot initial set of nodes
 	node_size = 300 * np.ones(len(subgraph_indices))
 	for node in sol['forbidden_nodes']:
-		node_size[subgraph.nodes().index(node)] = 600
+		if node in subgraph.nodes():
+			node_size[subgraph.nodes().index(node)] = 600
 
 	# nx.draw_networkx_labels(subgraph, pos, ax=ax)
 	
@@ -435,7 +445,7 @@ def simulate(G, sol, nodelist = []):
 			mt.set_text(mode_template % (j+1 , sum(xvec[range(len(G)*j, len(G)*(j+1) ), x_ind])))
 
 		for v, w, edge_marker in edge_anim:
-			ind = _stateind(G, v, G[v][w]['mode'])
+			ind = _stateind(G, v, G[v][w]['mode'], order_fcn)
 			x_this = x_i[ ind ] - u_i[ ind ] + u_i[(ind + len(G)) % (2*len(G)) ]
 			if x_this > 1e-5:
 				edge_marker[0].set_visible( True )
