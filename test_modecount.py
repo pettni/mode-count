@@ -5,7 +5,7 @@ import networkx as nx
 import scipy.linalg
 
 from modecount import Abstraction, lin_syst, _cycle_rows, _cycle_matrix, _sum_modes, _cycle_indices, \
-					  synthesize, _psi_lower, _psi_upper
+					  synthesize, _psi_lower, _psi_upper, _dyn_eq_mats
 
 class modecountTests(unittest.TestCase):
 
@@ -134,6 +134,17 @@ class modecountTests(unittest.TestCase):
 		a = [1,2]
 		self.assertEquals(_psi_lower(g, c, a, 2), 1)
 		self.assertEquals(_psi_upper(g, c, a, 2), 2)
+
+	def test_dyn_eq_mats(self):
+		A = np.array([[1, 2], [3,4]])
+		B = np.array([[1], [3]])
+
+		Aeq = _dyn_eq_mats(A,B,2)
+		self.assertTrue(np.all(Aeq.todense() == np.array([ [1, 0, 1, 2, -1, 0, 0, 0], 
+															 [3, 0, 3, 4, 0, -1, 0, 0], 
+															 [0, 1, 0, 0, 1, 2, -1, 0], 
+															 [0, 3, 0, 0, 3, 4, 0, -1]]) ))
+
 
 if __name__ == '__main__':
 	unittest.main()

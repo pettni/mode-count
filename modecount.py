@@ -37,7 +37,11 @@ import networkx as nx
 from mosek.fusion import *
 from mosek.array import *
 
+from cvxopt import matrix, spmatrix, solvers
+
 import itertools
+
+from random_cycle import random_cycle
 
 class Abstraction(object):
 	""" 
@@ -45,7 +49,7 @@ class Abstraction(object):
 	"""
 	def __init__(self, lb, ub, eta, tau):
 		self.eta = eta
-		self.tau = tau
+		self.tau = float(tau)
 
 		self.lb = np.array(lb, dtype=np.float64)
 		# self.lb -= (self.lb + float(eta)/2) % eta  # make sure that zero is in middle of cell
@@ -103,13 +107,16 @@ class Abstraction(object):
 			the vector field vf 
 		"""
 		dummy_vf = lambda z,t : vf(z)
+		tr_out = 0
 		for node, attr in self.graph.nodes_iter(data=True):
 			x_fin = scipy.integrate.odeint(dummy_vf, attr['mid'], np.arange(0, self.tau, self.tau/100))
 			if self.contains(x_fin[-1]):
 				midx = self.get_midx_pt(x_fin[-1])
 				self.graph.add_edge( node, midx, mode = self.nextMode )
 			else:
-				print "Warning: transition from ", attr['mid'], " in mode ", self.nextMode, " goes out of domain"
+				tr_out += 1
+		if tr_out > 0:
+			print "Warning: ", tr_out, " transitions out of ", len(self.graph), " in mode ", self.nextMode, " go out of domain"
 		self.nextMode += 1
 
 	def verify_bisim(self, beta, eps):
@@ -205,7 +212,33 @@ def lin_syst(G, order_fcn = None):
 
 	return A,B
 
-def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, integer = True, verbosity = 0):
+def _dyn_eq_mat(A, B, T):
+	# compute matrix Aeq s.t.
+	#  x(t+1) = Ax + Bu 
+	# for t = 0, ..., T-1
+	N = A.shape[1]
+	m = B.shape[1]
+
+	N_eq_dyn = N * T
+
+	A_dyn_u = scipy.sparse.block_diag((B,) * T)
+	A_dyn_x = scipy.sparse.bmat( [[scipy.sparse.block_diag((A,) * T), scipy.sparse.coo_matrix( (N_eq_dyn, N) ) ]]) \
+		+  scipy.sparse.bmat( [[scipy.sparse.coo_matrix( (N_eq_dyn, N) ), -scipy.sparse.identity( N_eq_dyn ) ]]) \
+
+	return scipy.sparse.bmat([[A_dyn_u, A_dyn_x]])
+
+def _verify_dims(list, hl, tot):
+	assert( np.sum([ mat.shape[1] for mat in list ]) == tot )
+	assert( np.all([ mat.shape[0] == len(hl) for mat in list ] ))
+
+def _coo_zeros(i,j):
+	return scipy.sparse.coo_matrix( (i,j) )
+
+def _sparce_scipy_to_cvxopt(A):
+	A_coo = A.tocoo()
+	return spmatrix(A_coo.data.astype(float), A_coo.row.astype(int), A_coo.col.astype(int), (A_coo.shape[0], A_coo.shape[1]))
+
+def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = True, verbosity = 0):
 
 	if order_fcn == None:
 		nodelist = G.nodes()
@@ -215,148 +248,244 @@ def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, inte
 	maxmode = _maxmode(G)
 	N = A.shape[1]
 
-	A_mos = _sparse_scipy_to_mosek(A)
-	B_mos = _sparse_scipy_to_mosek(B)
+	assert(len(G) == N / maxmode)
 
-	A_d = A.todense()
-	B_d = B.todense()
-	stacked_e = _sparse_scipy_to_mosek(_stacked_eye(G))
+	# fill out cycle set
+	if len(cycle_set) == 0:
 
-	M = Model("cycle_find") 
-
-	#########################################
-	######### Define variables ##############
-	#########################################
-
-	# control variables u(0), ... u(T-1)
-	u_t = []
-	for t in range(T):
-		if integer:
-			u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0), Domain.isInteger())) 
+		if False:
+			# find ranom cycles
+			while len(cycle_set) < 100:
+				cycle_set.append(random_cycle(G))
 		else:
-			u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0))) 
+			# enumerate all simple cycles
+			for c in nx.simple_cycles(G):
+				if not set(forbidden_nodes) & set(c):
+					# only care about cycles not involving roots
+					cycle_set.append(c)
 
-	# state variables x(0), ... x(T)
-	x_t = []
-	for t in range(T+1):
-		if integer:
-			x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0), Domain.isInteger()))
-		else:
-			x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0)))
+	# optimization vector is 
+	# 
+	#  [ u[0], ..., u[T-1], x[0], ..., x[T], a[0], ..., a[C-1], Kl[1], ..., Kl[C], Ku[1], ..., Ku[C], Kl, Ku, err ]
+	#
 
-	# cycle variables
-	c_i = []
-	alpha_i = []  # cycle assignments
-	Psi_i = []    # matrices cycle -> state
-	k_u_i = []    # upper mode counting bounds
-	k_l_i = []	  # lower mode counting bounds
-	for i, c in enumerate(nx.simple_cycles(G)):
-		if i > 100:
-			break
-		if not set(forbidden_nodes) & set(c):
-			# only care about cycles not involving roots
-			c_i.append(c)
-			if integer:
-				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0), Domain.isInteger()))
-			else:
-				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
-			Psi_i.append(_sparse_scipy_to_mosek(_cycle_indices(G, c, order_fcn) ))
-			k_u_i.append(M.variable( 1, Domain.unbounded() ))
-			k_l_i.append(M.variable( 1, Domain.unbounded() ))
+	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
 
-	# error variables
-	k_u = M.variable(1, Domain.unbounded())
-	k_l = M.variable(1, Domain.unbounded())
-	err = M.variable("error", 1, Domain.greaterThan(0.))
+	# variable block dimensions
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+	N_cycle_tot = sum(N_cycle)	# cycle vars
+	N_lb 	= len(cycle_set)	# lb vars
+	N_ub 	= len(cycle_set)	# ub vars
+	N_lb_tot = 1
+	N_ub_tot = 1
+	N_err = 1
 
-	#########################################
-	######### Define constraints ############
-	#########################################
+	N_tot = N_u + N_x + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err
 
-	# Constraint at t=0
-	M.constraint( Expr.mul(stacked_e, x_t[0]), Domain.equalsTo([float(i) for i in init]))
+	# number of equalities
+	N_eq_dyn = N * T 	  # dynamics
+	N_eq_0 = len(G)  # initial state agreement
+	N_eq_T = len(G)  # time T constraint
+	N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
+
+	N_ineq_mc_trans = T+1 	 					# transient mode constraint
+	N_ineq_control = N_u 						# upper/lower ctrl bounds
+	N_ineq_cycle_lb = sum(N_cycle) 				# upper bounds on cycle
+	N_ineq_cycle_ub = sum(N_cycle) 				# upper bounds on cycle
+	N_ineq_tot_lb = 1
+	N_ineq_tot_ub = 1
+	N_ineq_err = 2
+
+	index_ut =  lambda t : t * N 			# starting index for u[t], t = 0, ..., T-1
+	index_xt =  lambda t : N_u + t * N 	# starting index for x[t], t = 0, ..., T
+	index_ai =  lambda i : N_u + N_x + sum([N_cycle[ii] for ii in range(i) ])  	# starting index for a[i], i = 0, ..., C-1
+	index_Kli = lambda i : N_u + N_x + N_cycle_tot + i 							# index of Kl[i]
+	index_Kui = lambda i : N_u + N_x + N_cycle_tot + N_lb + i 					# index of Ku[i] 
+	index_Kl = N_u + N_x + N_cycle_tot + N_lb + N_ub 							# index of Kl
+	index_Ku = N_u + N_x + N_cycle_tot + N_lb + N_ub  + N_ub_tot				# index of Ku
+	index_err = N_u + N_x + N_cycle_tot + N_lb + N_ub  + N_ub_tot + N_lb_tot	# index of err
+
+	# assert this stuff makes sense
+	assert(index_err == N_tot - 1)
+	assert(index_ut(T-1) + N == index_xt(0) )
+	assert(index_xt(T) + N == index_ai(0) )
+	assert(index_ai(len(cycle_set) - 1) + len(cycle_set[-1]) == index_Kli(0) )
+	assert(index_Kl == index_Kui(len(cycle_set) - 1) + 1)
+
+	# Compute cycle -> vertex matrices for all cycles
+	Psi_mats = []    # matrices cycle -> state
+	for cycle in cycle_set:
+		Psi = _cycle_indices(G, cycle, order_fcn)
+		assert(Psi.shape[0] == len(G))
+		assert(Psi.shape[1] == len(cycle))
+		Psi_mats.append( Psi )
+
+
+	# Build equality constraints Aeq x = beq
+
+	# dynamics constraints
+	Aeq11 = _dyn_eq_mat(A,B,T)
+	Aeq12 = scipy.sparse.coo_matrix( (N_eq_dyn, N_cycle_tot + N_lb + N_ub  + N_lb_tot + N_ub_tot + N_err) )
+	beq1 = np.zeros( N_eq_dyn )
+
+	_verify_dims([Aeq11, Aeq12], beq1, N_tot)
+
+	# initial constraints
+	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
+	Aeq22 = _stacked_eye(G)
+	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err) )				# zeros
+	beq2 = np.array(init)
+
+	_verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
+
+	# final constraints
+	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
+	Aeq32 = _stacked_eye(G)
+	Aeq33 = scipy.sparse.bmat([ Psi_mats ])
+	Aeq34 = scipy.sparse.coo_matrix( (N_eq_T, N_lb + N_ub  + N_ub_tot + N_lb_tot + N_err) )
+	beq3 = np.zeros(N_eq_T)
+
+	_verify_dims([Aeq31, Aeq32, Aeq33, Aeq34], beq3, N_tot)
+
+	# forbidden node constraints
+	Aeq4 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
+		( range(N_eq_forbidden) , 
+		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
+		) ),
+		 (N_eq_forbidden, N_tot) )
+	beq4 = np.zeros(N_eq_forbidden)
+
+	_verify_dims([Aeq4], beq4, N_tot)
 	
-	# Dynamics constraints
-	mat = Matrix.sparse(1, N, [0 for i in range(len(G))], [(mode - 1)*len(G) + i for i in range(len(G))], [1. for i in range(len(G))])
-	for t in range(1, T+1):
-		M.constraint("dyn t=" + str(t), Expr.sub(x_t[t], Expr.add(Expr.mul(A_mos, x_t[t-1]), Expr.mul(B_mos, u_t[t-1])) ), Domain.equalsTo(0.))
+	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
+	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
+	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33, Aeq34]]) 
 
-	# Mode-counting during transient phase
-	for t in range(T+1):
-		M.constraint( Expr.sub( k_u, Expr.mul(mat, x_t[t])), Domain.greaterThan(0.) )
-		M.constraint( Expr.sub( Expr.mul(mat, x_t[t]), k_l), Domain.greaterThan(0.) )
+	Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
+	beq = np.hstack([beq1, beq2, beq3, beq4])
 
-		# don't enter forbidden nodes
-		for root in forbidden_nodes:
-			for m in range(1, maxmode+1):
-				M.constraint( x_t[t].index(_stateind(G, root, m, order_fcn)), Domain.equalsTo(0.) )
+	# Build inequality constraints Aiq x <= biq
+	# N_ineq_mc_trans = T 	 					# transient mode constraint
+	# N_ineq_control = 2 * N_u 					# upper/lower ctrl bounds
+	# N_ineq_cycle_lb = sum(N_cycle) 				# upper bounds on cycle
+	# N_ineq_cycle_ub = sum(N_cycle) 				# upper bounds on cycle
+	# N_ineq_tot_lb = 1
+	# N_ineq_tot_ub = 1
+	# N_ineq_err = 2
 
-	# Control constraints
-	for t in range(T):
-		# not larger than x
-		M.constraint( Expr.sub(x_t[t], u_t[t]), Domain.greaterThan(0.) )
+	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
+									(1, N) )
 
-	# Equality at time T
-	Psi_stacked = Matrix.sparse([Psi_i])
-	alpha_stacked = Expr.vstack([alpha.asExpr() for alpha in alpha_i])
-	M.constraint( Expr.sub(Expr.mul(Psi_stacked, alpha_stacked), Expr.mul(stacked_e, x_t[T])), Domain.equalsTo(0.) )
+	# lower bound mode counting
+	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
+	Aiq12 = scipy.sparse.block_diag( (-sum_mode_mat,) * (T+1) )
+	Aiq13 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub)
+	Aiq14 = scipy.sparse.coo_matrix( (np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq15 = _coo_zeros( N_ineq_mc_trans, N_ub_tot + N_err)
+	biq1 = np.zeros(N_ineq_mc_trans)
 
-	# Bound assignments in [k_l_i[i], k_u_i[i]]
-	for i, c in enumerate(c_i):
-		Ac = DenseMatrix( _cycle_matrix(G, c, mode) )
-		M.constraint( Expr.sub(Expr.mul(Ac, alpha_i[i]), Expr.mul(k_l_i[i], [1. for j in range(len(c))]) ), Domain.greaterThan(0.) )
-		M.constraint( Expr.sub(Expr.mul(k_u_i[i], [1. for j in range(len(c))]), Expr.mul(Ac, alpha_i[i]) ), Domain.greaterThan(0.) )
+	_verify_dims([Aiq11, Aiq12, Aiq13, Aiq14, Aiq15], biq1, N_tot)
 
-	# Set \sum k_l_i[i] <= K <= \sum k_u_i[i] 
-	k_u_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_u_i]) )
-	k_l_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_l_i]) )
-	M.constraint( Expr.sub( k_u, k_u_sum ), Domain.greaterThan(0.) )
-	M.constraint( Expr.sub( k_l_sum, k_l ), Domain.greaterThan(0.) )
+	# upper bound mode counting
+	Aiq21 = Aiq11
+	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
+	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub + N_lb_tot)
+	Aiq24 = scipy.sparse.coo_matrix( (-np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq25 = _coo_zeros( N_ineq_mc_trans, N_err)
+	biq2 = np.zeros(N_ineq_mc_trans)
 
-	M.constraint( Expr.sub(err, Expr.sub(k_u, float(K))), Domain.greaterThan(0.) )
-	M.constraint( Expr.sub(err, Expr.sub(float(K), k_l)), Domain.greaterThan(0.) )
+	_verify_dims([Aiq21, Aiq22, Aiq23, Aiq24, Aiq25], biq2, N_tot)
 
-	# Make sure number of systems is preserved (i.e. no transitions to out of domain!)
-	M.constraint( Expr.sum(x_t[T]), Domain.equalsTo( float(sum(init)) ) )
+	# lower control bounds
+	Aiq31 = -scipy.sparse.identity( N_u )
+	Aiq32 = _coo_zeros( N_ineq_control, N_tot - N_u )
+	biq3 = np.zeros(N_ineq_control)
 
-	M.objective(ObjectiveSense.Minimize, err)
+	_verify_dims([Aiq31, Aiq32], biq3, N_tot)
 
-	# Enable logger output
-	if verbosity:
-		M.setLogHandler(sys.stdout) 
+	# upper control bounds
+	Aiq41 = scipy.sparse.identity(N_ineq_control)
+	Aiq42 = -scipy.sparse.identity(N_ineq_control)
+	Aiq43 = _coo_zeros(N_ineq_control, N + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err)
+	biq4 = np.zeros(N_ineq_control)
 
-	M.solve()
+	_verify_dims([Aiq41, Aiq42, Aiq43], biq4, N_tot)
 
-	if verbosity:
-		print ""
-		print "Primal solution status: ", M.getPrimalSolutionStatus()  
-		print "Dual solution status: ", M.getDualSolutionStatus()  
-		print ""
-		print "Error: ", err.level()[0]
-		print "Guaranteed interval: [", K-err.level()[0], ", ", K+err.level()[0], "]"
-		print ""
-		print "### Cycles ###"
+	# lower cycle bounds
+	Aiq51 = _coo_zeros( N_ineq_cycle_lb, N_u + N_x )
+	Aiq52 = -scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
+	Aiq53 = scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
+	Aiq54 = _coo_zeros( N_ineq_cycle_lb, N_ub + N_lb_tot + N_ub_tot + N_err )
+	biq5 = np.zeros(N_ineq_cycle_lb)
+
+	_verify_dims([Aiq51, Aiq52, Aiq53, Aiq54], biq5, N_tot)
+
+	# upper cycle bounds
+	Aiq61 = _coo_zeros( N_ineq_cycle_lb, N_u + N_x )
+	Aiq62 = scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
+	Aiq63 = _coo_zeros( N_ineq_cycle_ub, N_lb )
+	Aiq64 = -scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
+	Aiq65 = _coo_zeros( N_ineq_cycle_lb, N_lb_tot + N_ub_tot + N_err )
+	biq6 = np.zeros(N_ineq_cycle_lb)
+
+	_verify_dims([Aiq61, Aiq62, Aiq63, Aiq64, Aiq65], biq6, N_tot)
+
+	# set sum(ub) < ub_tot, lb_tot < sum(lb)
+	Aiq71 = _coo_zeros(N_lb_tot + N_ub_tot, N_u + N_x + N_cycle_tot)
+	Aiq72 = scipy.sparse.block_diag( (-np.ones([1, N_lb]), np.ones([1, N_ub])) )
+	Aiq73 = scipy.sparse.identity(N_lb_tot + N_ub_tot)
+	Aiq74 = _coo_zeros(N_lb_tot + N_ub_tot, N_err)
+	biq7  = np.zeros(N_lb_tot + N_ub_tot)
+
+	_verify_dims([Aiq71, Aiq72, Aiq73, Aiq74], biq7, N_tot)
+
+	# set err > ub - L,  err > K - lb
+	Aiq81 = _coo_zeros(2, N_u + N_x + N_cycle_tot + N_lb + N_ub)
+	Aiq82 = np.array([[ -1, 0, -1 ], [0, 1, -1]])
+	biq8  = np.array([ K, -K ])
+
+	_verify_dims([Aiq81, Aiq82], biq8, N_tot)
+
+	Aiq1 = scipy.sparse.bmat([ [ Aiq11, Aiq12, Aiq13, Aiq14, Aiq15 ]] )
+	Aiq2 = scipy.sparse.bmat([ [ Aiq21, Aiq22, Aiq23, Aiq24, Aiq25 ]] )
+	Aiq3 = scipy.sparse.bmat([ [ Aiq31, Aiq32 ]] )
+	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
+	Aiq5 = scipy.sparse.bmat([ [ Aiq51, Aiq52, Aiq53, Aiq54 ]] )
+	Aiq6 = scipy.sparse.bmat([ [ Aiq61, Aiq62, Aiq63, Aiq64, Aiq65 ]] )
+	Aiq7 = scipy.sparse.bmat([ [ Aiq71, Aiq72, Aiq73, Aiq74 ]] )
+	Aiq8 = scipy.sparse.bmat([ [ Aiq81, Aiq82 ]] )
+
+	Aiq = scipy.sparse.bmat([ [Aiq1], [Aiq2], [Aiq3], [Aiq4], [Aiq5], [Aiq6], [Aiq7], [Aiq8] ])
+	biq = np.hstack([biq1, biq2, biq3, biq4, biq5, biq6, biq7, biq8])
+
+	# cost function
+	c = np.zeros(N_tot)
+	c[-1] = 1
+
+	sol = solvers.lp(matrix(c), _sparce_scipy_to_cvxopt(Aiq), matrix(biq), _sparce_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
+
+	x_out = sol['x']
 
 	final_c = []
 	final_a = []
-	for i, alpha in enumerate(alpha_i):
-		if sum(alpha.level()) > 1e-5:
+	for i in range(len(cycle_set)):
+		alpha_i = np.array(x_out[index_ai(i): index_ai(i) + len(cycle_set[i])])
+		if sum( alpha_i ) > 1e-5:
 			if verbosity:
-				print "Cycle: ", c_i[i]
-				print "Cycle mode-count: ", next(_cycle_rows(G,c_i[i], mode))
-				print "Cycle length: ", len(alpha.level())
-				print "Assignment: ", alpha.level()
-			final_c.append(c_i[i])
-			final_a.append(alpha.level())
+				print "Cycle: ", cycle_set[i]
+				print "Cycle mode-count: ", next(_cycle_rows(G,cycle_set[i], mode))
+				print "Assignment: ", alpha_i
+			final_c.append(cycle_set[i])
+			final_a.append(alpha_i)
 
-	for t in range(1,T+1):
-		# check that sol obeys dynamics up to time T
-		if (np.all(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()) > 1e-10)):
-			print "Warning, dynamics mismatch for ", np.max(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()))
+	# for t in range(1,T+1):
+	# 	# check that sol obeys dynamics up to time T
+	# 	if (np.all(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()) > 1e-10)):
+	# 		print "Warning, dynamics mismatch for ", np.max(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()))
 
-	sol = {}
-	sol['states'] = [x_t[t].level() for t in range(T+1)]
-	sol['controls'] = [u_t[t].level() for t in range(T)]
+	sol['controls'] = np.array([np.array(x_out[t * N : (t+1) * N ]) for t in range(T)])
+	sol['states'] = np.array([np.array(x_out[N_u + t * N : N_u + (t+1) * N ]) for t in range(T+1)])
 	sol['cycles'] = final_c
 	sol['assignments'] = final_a
 	sol['forbidden_nodes'] = forbidden_nodes
@@ -390,11 +519,11 @@ def simulate(G, sol, order_fcn, nodelist = []):
 	init = sol['states'][0]
 	xvec = np.zeros([len(init), tmax+1], dtype=float)
 	uvec = np.zeros([len(init), tmax+1], dtype=float)
-	xvec[:,0] = init
+	xvec[:,0] = init.flatten()
 	for t in range(tmax):
 		u = controls.get_u(t, xvec[:,t])
-		uvec[:,t] = u
-		xvec[:,t+1] = A.dot(xvec[:,t]) + B.dot(u)
+		uvec[:,t] = u.flatten()
+		xvec[:,t+1] = A.dot(xvec[:,t]) + B.dot(u.flatten())
 
 	#################################
 	######### PLOT THE GRAPH ########
@@ -510,7 +639,6 @@ def _cycle_rows(G, C, mode):
 
 def _sum_modes(state, maxmode):
 	return np.sum([state[ i * len(state)/maxmode : (i+1) * len(state)/maxmode] for i in range(maxmode)], axis=0)
-
 
 def _psi_lower(G, cycle, assignment, mode):
 	return np.min([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])

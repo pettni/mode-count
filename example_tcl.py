@@ -14,7 +14,7 @@ Rth = 2.
 Pm = 5.6
 eta_tcl = 2.5
 theta_r = 22.5
-delta = 0.3
+delta = 1
 
 # Ambient temperature
 theta_a = 32.
@@ -34,9 +34,11 @@ kl2 = lambda r,s : r * np.exp(-s*a)
 # Abstraction parameters
 lb = [theta_r - delta]		# lower bounds
 ub = [theta_r + delta]		# upper bounds
-eta = 0.0005					# space discretization
-tau = 0.016					# time discretization
+eta = 0.001					# space discretization
+tau = 0.05					# time discretization
 eps = 0.1					# desired bisimulation approximation
+
+print "abstraction will have ", np.product((np.array(ub)-np.array(lb))/eta), " states"
 
 # Initiate abstraction
 ab = Abstraction(lb, ub, eta, tau)

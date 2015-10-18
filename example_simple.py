@@ -32,9 +32,9 @@ mode = 1		# mode to count (1 or 2)
 forbidden_nodes = G.nodes_with_selfloops()
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, verbosity = 0)
+mc_sol = synthesize2(G, init, T, mode_des, mode, forbidden_nodes = forbidden_nodes, verbosity = 1)
 
 # simulate it on the graph!
-anim = simulate(G, mc_sol)
+anim = simulate(G, mc_sol, lambda node : G.nodes().index(node))
 anim.save("example_simple_anim.mp4", fps=10)
 plt.show()
