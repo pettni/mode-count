@@ -58,7 +58,9 @@ forbidden_nodes = G.nodes_with_selfloops()
 order_fcn = ab.node_to_idx
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes, order_fcn, verbosity = 0)
+mc_sol = synthesize(G, init, T, mode_des, mode, 
+			forbidden_nodes = forbidden_nodes, order_fcn = order_fcn, 
+			verbosity = 0)
 
 # simulate it on the connected subset of the graph!
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
