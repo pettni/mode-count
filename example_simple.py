@@ -32,7 +32,7 @@ mode = 1		# mode to count (1 or 2)
 forbidden_nodes = G.nodes_with_selfloops()
 
 # mode-counting synthesis
-mc_sol = synthesize2(G, init, T, mode_des, mode, forbidden_nodes = forbidden_nodes, verbosity = 1)
+mc_sol = synthesize2(G, init, T, mode_des, mode, forbidden_nodes = forbidden_nodes, integer = False, verbosity = 1)
 
 # simulate it on the graph!
 anim = simulate(G, mc_sol, lambda node : G.nodes().index(node))

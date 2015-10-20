@@ -22,13 +22,16 @@ def dfs(G, node, visited, forbidden):
 	# choose random successor
 	next_node = choice(allowed_nodes)
 
-	if len(visited) > 0 and next_node == visited[0]:
+	if next_node in visited:
 		# found a cycle
-		rot_ind = np.argmin(visited)
-		return visited[rot_ind:] + visited[:rot_ind]
+		cycle = visited[ visited.index(next_node): ]
+
+		# rotate it
+		rot_ind = np.argmin(cycle)
+		return cycle[rot_ind:] + cycle[:rot_ind]
 
 	# continue looking
-	test = dfs(G, next_node, visited + [next_node], forbidden.union(set([next_node])) )
+	test = dfs(G, next_node, visited + [next_node], forbidden )
 	if test:
 		# found a cycle downstream
 		return test 
@@ -41,7 +44,6 @@ def random_cycle(G, ml = 2):
 	tried_nodes = set([])
 	while not cycle: 
 		remaining_nodes = diff(G.nodes(), tried_nodes)
-
 		if len(remaining_nodes) == 0:
 			# graph doesnt have cycles
 			return False

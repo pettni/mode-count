@@ -33,25 +33,21 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 import networkx as nx
+import itertools
 
 import time
 
-
-from mosek.fusion import *
-from mosek.array import *
-
 from cvxopt import matrix, spmatrix, solvers
-import itertools
+import cvxopt.msk as msk
+
+import mosek
 
 from random_cycle import random_cycle
 
-lp_solver = 'glpk'
+lp_solver = 'mosek'
 
 solvers.options['show_progress'] = False
-solvers.options['MOSEK'] = {mosek.iparam.log: 0}
-solvers.options['LPX_K_MSGLEV'] = 0
-solvers.options['msg_lev'] = 'GLP_MSG_OFF'
-
+solvers.options['mosek'] = {mosek.iparam.log: 0} 
 np.set_printoptions(precision=2, suppress=True)
 
 class Abstraction(object):
@@ -130,9 +126,6 @@ class Abstraction(object):
 			print "Warning: ", tr_out, " transitions out of ", len(self.graph), " in mode ", self.nextMode, " go out of domain"
 		self.nextMode += 1
 
-	def verify_bisim(self, beta, eps):
-		return (beta(eps, self.tau) + self.eta/2 <= eps)
-
 	def node_to_idx(self, node):
 		# Given a node (x1,x2,x3, ...),
 		# return the list index on the form
@@ -199,6 +192,9 @@ class CycleControl():
 		
 		# return np.array(u.level())
 
+def verify_bisim(beta, tau, eta, eps):
+	return (beta(eps, tau) + eta/2 <= eps)
+
 def draw_modes(G):
 	""" 
 		Given a DiGraph G, w
@@ -233,33 +229,7 @@ def lin_syst(G, order_fcn = None):
 
 	return A,B
 
-def _dyn_eq_mat(A, B, T):
-	# compute matrix Aeq s.t.
-	#  x(t+1) = Ax + Bu 
-	# for t = 0, ..., T-1
-	N = A.shape[1]
-	m = B.shape[1]
-
-	N_eq_dyn = N * T
-
-	A_dyn_u = scipy.sparse.block_diag((B,) * T)
-	A_dyn_x = scipy.sparse.bmat( [[scipy.sparse.block_diag((A,) * T), scipy.sparse.coo_matrix( (N_eq_dyn, N) ) ]]) \
-		+  scipy.sparse.bmat( [[scipy.sparse.coo_matrix( (N_eq_dyn, N) ), -scipy.sparse.identity( N_eq_dyn ) ]]) \
-
-	return scipy.sparse.bmat([[A_dyn_u, A_dyn_x]])
-
-def _verify_dims(list, hl, tot):
-	assert( np.sum([ mat.shape[1] for mat in list ]) == tot )
-	assert( np.all([ mat.shape[0] == len(hl) for mat in list ] ))
-
-def _coo_zeros(i,j):
-	return scipy.sparse.coo_matrix( (i,j) )
-
-def _sparse_scipy_to_cvxopt(A):
-	A_coo = A.tocoo()
-	return spmatrix(A_coo.data.astype(float), A_coo.row.astype(int), A_coo.col.astype(int), (A_coo.shape[0], A_coo.shape[1]))
-
-def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = True, verbosity = 0):
+def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 0, verification = False):
 
 	if order_fcn == None:
 		nodelist = G.nodes()
@@ -272,8 +242,9 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	assert(len(G) == N / maxmode)
 
 	# fill out cycle set
+	if verbosity: print "generating cycles"
 	if len(cycle_set) == 0:
-		if False:
+		if True:
 			# find ranom cycles
 			while len(cycle_set) < 100:
 				cycle_set.append(random_cycle(G))
@@ -328,19 +299,23 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	Psi_mats = []    # matrices cycle -> state
 	for cycle in cycle_set:
 		Psi = _cycle_indices(G, cycle, order_fcn)
-		assert(Psi.shape[0] == len(G))
-		assert(Psi.shape[1] == len(cycle))
+		if verification:
+			assert(Psi.shape[0] == len(G))
+			assert(Psi.shape[1] == len(cycle))
 		Psi_mats.append( Psi )
 
 
 	# Build equality constraints Aeq x = beq
+
+	if verbosity: print "setting up equality constraints"
 
 	# dynamics constraints
 	Aeq11 = _dyn_eq_mat(A,B,T)
 	Aeq12 = scipy.sparse.coo_matrix( (N_eq_dyn, N_cycle_tot + N_lb + N_ub  + N_lb_tot + N_ub_tot + N_err) )
 	beq1 = np.zeros( N_eq_dyn )
 
-	_verify_dims([Aeq11, Aeq12], beq1, N_tot)
+	if verification: _verify_dims([Aeq11, Aeq12], beq1, N_tot)
+	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
 
 	# initial constraints
 	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
@@ -348,7 +323,8 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err) )				# zeros
 	beq2 = np.array(init)
 
-	_verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
+	if verification: _verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
+	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
 
 	# final constraints
 	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
@@ -357,26 +333,39 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	Aeq34 = _coo_zeros( N_eq_T, N_lb + N_ub  + N_ub_tot + N_lb_tot + N_err )
 	beq3 = np.zeros(N_eq_T)
 
-	_verify_dims([Aeq31, Aeq32, Aeq33, Aeq34], beq3, N_tot)
+	if verification: _verify_dims([Aeq31, Aeq32, Aeq33, Aeq34], beq3, N_tot)
+	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33, Aeq34]]) 
+
+	# no nodes exited state space constraint
+	Aeq41 = _coo_zeros( 1, N_u + N*T )
+	Aeq42 = np.ones([1, N])
+	Aeq43 = _coo_zeros( 1, N_cycle_tot + N_lb + N_ub  + N_ub_tot + N_lb_tot + N_err )
+	beq4 = np.array([ np.sum(init) ])
+	
+	if verification: _verify_dims([Aeq41, Aeq42, Aeq43], beq4, N_tot)
+	Aeq4 = scipy.sparse.bmat([[ Aeq41, Aeq42, Aeq43]]) 
 
 	# forbidden node constraints
-	Aeq4 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
+	Aeq5 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
 		( range(N_eq_forbidden) , 
 		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
 		) ),
 		 (N_eq_forbidden, N_tot) )
-	beq4 = np.zeros(N_eq_forbidden)
+	beq5 = np.zeros(N_eq_forbidden)
 
-	_verify_dims([Aeq4], beq4, N_tot)
+	if verification: _verify_dims([Aeq5], beq5, N_tot)
 	
-	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
-	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
-	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33, Aeq34]]) 
+	if N_eq_forbidden:
+		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4], [Aeq5]])
+		beq = np.hstack([beq1, beq2, beq3, beq4, beq5])
+	else:
+		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
+		beq = np.hstack([beq1, beq2, beq3, beq4])
 
-	Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
-	beq = np.hstack([beq1, beq2, beq3, beq4])
 
 	# Build inequality constraints Aiq x <= biq
+	if verbosity: print "setting up inequality constraints"
+
 	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
 									(1, N) )
 
@@ -450,7 +439,6 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 
 	_verify_dims([Aiq81, Aiq82], biq8, N_tot)
 
-
 	# cycles positive
 	Aiq91 = _coo_zeros(N_ineq_cycle_pos, N_u + N_x)
 	Aiq92 = -scipy.sparse.identity( N_ineq_cycle_pos )
@@ -481,17 +469,20 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	end = time.time()
 	print "It took ", end - start, " to set up LP"
 
-	sol = solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), lp_solver)
+	if integer:
+		solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq) )
+	else:
+		lp_sln = solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
+		x_out = lp_sln['x']
 
-	x_out = sol['x']
+	err_out = x_out[-1]
 
 	if verbosity:
 		print ""
-		print "Solution status: ", sol['status']
+		print "Error: ", err_out
+		print "Guaranteed interval: [", K-err_out, ", ", K+err_out, "]"
 		print ""
-		print "Error: ", sol['primal objective']
-		print "Guaranteed interval: [", K-sol['primal objective'], ", ", K+sol['primal objective'], "]"
-		print ""
+
 		print "### Cycles ###"
 
 	final_c = []
@@ -506,6 +497,8 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 				print "Assignment: ", alpha_i
 			final_c.append(cycle_set[i])
 			final_a.append(alpha_i)
+
+	sol = {}
 
 	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
 	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
@@ -796,9 +789,35 @@ def _cycle_indices(G, ci, order_fcn = None):
 	vals = np.ones(len(ci))
 	return scipy.sparse.coo_matrix((vals, (row_idx, col_idx)), shape = (len(G), len(ci)) )
 
+def _dyn_eq_mat(A, B, T):
+	# compute matrix Aeq s.t.
+	#  x(t+1) = Ax + Bu 
+	# for t = 0, ..., T-1
+	N = A.shape[1]
+	m = B.shape[1]
+
+	N_eq_dyn = N * T
+
+	A_dyn_u = scipy.sparse.block_diag((B,) * T)
+	A_dyn_x = scipy.sparse.bmat( [[scipy.sparse.block_diag((A,) * T), scipy.sparse.coo_matrix( (N_eq_dyn, N) ) ]]) \
+		+  scipy.sparse.bmat( [[scipy.sparse.coo_matrix( (N_eq_dyn, N) ), -scipy.sparse.identity( N_eq_dyn ) ]]) \
+
+	return scipy.sparse.bmat([[A_dyn_u, A_dyn_x]])
+
+def _verify_dims(list, hl, tot):
+	assert( np.sum([ mat.shape[1] for mat in list ]) == tot )
+	assert( np.all([ mat.shape[0] == len(hl) for mat in list ] ))
+
+def _coo_zeros(i,j):
+	return scipy.sparse.coo_matrix( (i,j) )
+
 def _sparse_scipy_to_mosek(A):
 	A_coo = A.tocoo()
 	return Matrix.sparse(A_coo.shape[0], A_coo.shape[1], list(A_coo.row.astype(int)), list(A_coo.col.astype(int)), list(A_coo.data.astype(float)))
+
+def _sparse_scipy_to_cvxopt(A):
+	A_coo = A.tocoo()
+	return spmatrix(A_coo.data.astype(float), A_coo.row.astype(int), A_coo.col.astype(int), (A_coo.shape[0], A_coo.shape[1]))
 
 def _maxmode(G):
 	return max([d['mode'] for (u,v,d) in  G.edges(data=True)])
