@@ -1,6 +1,8 @@
 import networkx as nx
 import numpy as np
-from random import choice
+
+def mychoice(list):
+	return list[np.random.randint(len(list))]
 
 def diff(a, b):
 	""" 
@@ -9,37 +11,66 @@ def diff(a, b):
 	b = set(b)
 	return [aa for aa in a if aa not in b]
 
-def dfs(G, node, visited, forbidden):
+def dfs(G, node, visited, forbidden, min_length, mode_weight, temp_forbidden = set([])):
 	""" 
 		Do a depth first search
+			G 				- graph
+			node 			- node to start at
+			visited 		- list of previously visited nodes
+			forbidden 		- nodes that can't be in cycle
+			min_length 		- minimal cycle length
+			mode_weight 	- probab. to continue in same mode
+			temp_forbidden  - used to temporarily exclude cycles that are too short
 	"""
-	allowed_nodes = diff(G.successors(node),forbidden)
+
+	allowed_nodes = diff(G.successors(node), forbidden.union(temp_forbidden))
 
 	if len(allowed_nodes) == 0:
 		# Reached leaf
 		return False
 
 	# choose random successor
-	next_node = choice(allowed_nodes)
+	if len(visited) >= 2 and len(allowed_nodes) >= 2:
+		current_mode = G[visited[-2]][visited[-1]]['mode']
+		next_modes = [G[node][next_node]['mode'] for next_node in allowed_nodes ]
+		if current_mode in next_modes:
+			# 
+			ind = next_modes.index(current_mode)
+			next_node_same = allowed_nodes[ind]
+			if np.random.random(1) < mode_weight:
+				# stick with same mode
+				next_node = next_node_same
+			else:
+				# choose other mode uniformly
+				next_node = mychoice(diff(allowed_nodes, set([next_node_same])))
+		else:
+			# can not continue with current mode
+			next_node = mychoice(allowed_nodes)	
+	else:
+		next_node = mychoice(allowed_nodes)
 
 	if next_node in visited:
 		# found a cycle
 		cycle = visited[ visited.index(next_node): ]
 
-		# rotate it
-		rot_ind = np.argmin(cycle)
-		return cycle[rot_ind:] + cycle[:rot_ind]
+		if len(cycle) > min_length:
+			# rotate it
+			rot_ind = np.argmin(cycle)
+			return cycle[rot_ind:] + cycle[:rot_ind]
+		else:
+			# must choose other node
+			return dfs(G, node, visited, forbidden, min_length, mode_weight, set([next_node]))
 
-	# continue looking
-	test = dfs(G, next_node, visited + [next_node], forbidden )
+	# no cycle, continue down graph
+	test = dfs(G, next_node, visited + [next_node], forbidden, min_length, mode_weight)
 	if test:
 		# found a cycle downstream
 		return test 
 	else:
 		# need to pick another vertex!
-		return dfs(G, node, visited, forbidden.union(set([next_node])) )
+		return dfs(G, node, visited, forbidden.union(set([next_node])), min_length, mode_weight)
 
-def random_cycle(G, ml = 2):
+def random_cycle(G, min_length = 5, mode_weight = 0.5):
 	cycle = False
 	tried_nodes = set([])
 	while not cycle: 
@@ -47,22 +78,14 @@ def random_cycle(G, ml = 2):
 		if len(remaining_nodes) == 0:
 			# graph doesnt have cycles
 			return False
-
-		init_node = choice(remaining_nodes)
-		cycle = dfs(G, init_node, [init_node], set([]))
+		init_node = mychoice(remaining_nodes)
+		cycle = dfs(G, init_node, [init_node], set([]), min_length, mode_weight)
 		tried_nodes = tried_nodes.union([init_node])
+	verify_cycle(G, cycle)
 	return cycle
 
-def main():
-	G = nx.DiGraph()
-	G.add_nodes_from([1,2,3,4,5,6,7,8,9,10])
-	G.add_path([1,2,3,1])
-	G.add_path([1,2,3,4,5,6,7,1])
-	G.add_path([7,8,9])
-	G.add_path([7,10,9])
-
-	print random_cycle(G)
-
-
-if __name__ == '__main__':
-	main()
+def verify_cycle(G, cyc):
+	for i in range(len(cyc)):
+		this_node = cyc[i]
+		next_node = cyc[(i+1) % len(cyc)]
+		assert(next_node in G.successors(this_node))

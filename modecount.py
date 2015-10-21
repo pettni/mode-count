@@ -43,11 +43,9 @@ import cvxopt.msk as msk
 import mosek
 
 from random_cycle import random_cycle
+from make_integer import make_integer
 
 lp_solver = 'mosek'
-
-solvers.options['show_progress'] = False
-solvers.options['mosek'] = {mosek.iparam.log: 0} 
 np.set_printoptions(precision=2, suppress=True)
 
 class Abstraction(object):
@@ -59,7 +57,6 @@ class Abstraction(object):
 		self.tau = float(tau)
 
 		self.lb = np.array(lb, dtype=np.float64)
-		self.lb -= (self.lb + float(eta)/2) % eta  # make sure that zero is in middle of cell
 		self.ub = np.array(ub, dtype=np.float64)
 		self.ub += (self.ub - self.lb) % eta # make domain number of eta's
 		self.nextMode = 1
@@ -77,7 +74,7 @@ class Abstraction(object):
 	def __len__(self):
 		return len(self.graph)
 
-	def get_midx_pt(self, pt):
+	def point_to_midx(self, pt):
 		""" 
 			Return the discrete multiindex corresponding to a given continuous point
 		"""
@@ -118,7 +115,7 @@ class Abstraction(object):
 		for node, attr in self.graph.nodes_iter(data=True):
 			x_fin = scipy.integrate.odeint(dummy_vf, attr['mid'], np.arange(0, self.tau, self.tau/100))
 			if self.contains(x_fin[-1]):
-				midx = self.get_midx_pt(x_fin[-1])
+				midx = self.point_to_midx(x_fin[-1])
 				self.graph.add_edge( node, midx, mode = self.nextMode )
 			else:
 				tr_out += 1
@@ -159,7 +156,7 @@ class CycleControl():
 		self.stacked_e = _stacked_eye(G)
 
 	def get_u(self, t, state):
-		
+
 		if t < self.u_arr.shape[1]:
 			return self.u_arr[:,t]
 
@@ -174,23 +171,14 @@ class CycleControl():
 		Aiq = scipy.sparse.bmat( [ [-scipy.sparse.identity(self.B.shape[1])],
 								   [scipy.sparse.identity(self.B.shape[1])] ] )
 		biq = np.hstack([np.zeros(self.B.shape[1]), state])
+		solvers.options['mosek'] = {mosek.iparam.log: 0} 
 
 		c = np.zeros(self.B.shape[1])
 		c[0] = 1.
 		sol = solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), lp_solver)
-
+		if sol['status'] == "primal infeasible":
+			raise('could not solve control LP')
 		return np.array(sol['x']).flatten()
-
-		# M = Model()
-		# u = M.variable(self.B.shape[1], Domain.greaterThan(0.))
-		# M.constraint( Expr.sub(state, u), Domain.greaterThan(0.))
-		# M.constraint( Expr.sub( Expr.mul(_sparse_scipy_to_mosek(Aeq), u), list(beq)), Domain.equalsTo(0.) )
-
-		# M.acceptedSolutionStatus(AccSolutionStatus.Anything)
-
-		# M.solve()
-		
-		# return np.array(u.level())
 
 def verify_bisim(beta, tau, eta, eps):
 	return (beta(eps, tau) + eta/2 <= eps)
@@ -229,7 +217,236 @@ def lin_syst(G, order_fcn = None):
 
 	return A,B
 
-def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 0, verification = False):
+def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 0, verification = True):
+
+	if verbosity >= 3:
+		solvers.options['show_progress'] = True
+		solvers.options['mosek'] = {mosek.iparam.log: 1} 
+	else:
+		solvers.options['show_progress'] = False
+		solvers.options['mosek'] = {mosek.iparam.log: 0} 
+
+	if order_fcn == None:
+		nodelist = G.nodes()
+		order_fcn = lambda v : nodelist.index(v)
+
+	A,B = lin_syst(G, order_fcn)
+	maxmode = _maxmode(G)
+	N = A.shape[1]
+
+	[Kl, Ku] = cycles_maxmin(G, cycle_set, mode, assignments)
+
+	assert(len(G) == N / maxmode)
+
+	### SET UP LP ###
+
+	start = time.time()
+
+	# optimization vector is 
+	# 
+	#  [ u[0], ..., u[T-1], x[0], ..., x[T], a[0], ..., a[C-1], Kl[1], ..., Kl[C], Ku[1], ..., Ku[C], Kl, Ku, err ]
+	#
+
+	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
+
+	# variable block dimensions
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+	N_lb 	= len(cycle_set)	# lb vars
+	N_ub 	= len(cycle_set)	# ub vars
+	N_lb_tot = 1
+	N_ub_tot = 1
+	N_err = 1
+
+	N_tot = N_u + N_x + N_lb_tot + N_ub_tot + N_err
+
+	# number of equalities
+	N_eq_dyn = N * T 	  # dynamics
+	N_eq_0 = len(G)  # initial state agreement
+	N_eq_T = len(G)  # time T constraint
+	N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
+
+	# number of inequalities
+	N_ineq_mc_trans = T+1 	 					# transient mode constraint
+	N_ineq_control = N_u 						# upper/lower ctrl bounds
+	N_ineq_err = 2
+
+	# Compute cycle -> vertex matrices for all cycles
+	Psi_mats = []    # matrices cycle -> state
+	for cycle in cycle_set:
+		Psi = _cycle_indices(G, cycle, order_fcn)
+		if verification:
+			assert(Psi.shape[0] == len(G))
+			assert(Psi.shape[1] == len(cycle))
+		Psi_mats.append( Psi )
+
+
+	# Build equality constraints Aeq x = beq
+
+	if verbosity >= 1: print "setting up equality constraints"
+
+	# dynamics constraints
+	Aeq11 = _dyn_eq_mat(A,B,T)
+	Aeq12 = scipy.sparse.coo_matrix( (N_eq_dyn, N_lb_tot + N_ub_tot + N_err) )
+	beq1 = np.zeros( N_eq_dyn )
+
+	if verification: _verify_dims([Aeq11, Aeq12], beq1, N_tot)
+	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
+
+	# initial constraints
+	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
+	Aeq22 = _stacked_eye(G)
+	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T + N_lb_tot + N_ub_tot + N_err) )				# zeros
+	beq2 = np.array(init)
+
+	if verification: _verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
+	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
+
+	# final constraints
+	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
+	Aeq32 = _stacked_eye(G)
+	Aeq33 = _coo_zeros( N_eq_T, N_ub_tot + N_lb_tot + N_err )
+	beq3 = np.sum( [ _cycle_indices(G, cycle, order_fcn).dot(ass) for cycle, ass in zip( cycle_set, assignments ) ], 0)
+
+	if verification: _verify_dims([Aeq31, Aeq32, Aeq33], beq3, N_tot)
+	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33]]) 
+
+	# no nodes exited state space constraint
+	Aeq41 = _coo_zeros( 1, N_u + N*T )
+	Aeq42 = np.ones([1, N])
+	Aeq43 = _coo_zeros( 1, N_ub_tot + N_lb_tot + N_err )
+	beq4 = np.array([ np.sum(init) ])
+	
+	if verification: _verify_dims([Aeq41, Aeq42, Aeq43], beq4, N_tot)
+	Aeq4 = scipy.sparse.bmat([[ Aeq41, Aeq42, Aeq43]]) 
+
+	# forbidden node constraints
+	Aeq5 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
+		( range(N_eq_forbidden) , 
+		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
+		) ),
+		 (N_eq_forbidden, N_tot) )
+	beq5 = np.zeros(N_eq_forbidden)
+
+	if verification: _verify_dims([Aeq5], beq5, N_tot)
+	
+	if N_eq_forbidden:
+		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4], [Aeq5]])
+		beq = np.hstack([beq1, beq2, beq3, beq4, beq5])
+	else:
+		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
+		beq = np.hstack([beq1, beq2, beq3, beq4])
+
+
+	# Build inequality constraints Aiq x <= biq
+	if verbosity >= 1: print "setting up inequality constraints"
+
+	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
+									(1, N) )
+
+	# lower bound mode counting
+	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
+	Aiq12 = scipy.sparse.block_diag( (-sum_mode_mat,) * (T+1) )
+	Aiq13 = scipy.sparse.coo_matrix( (np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq14 = _coo_zeros( N_ineq_mc_trans, N_ub_tot + N_err)
+	biq1 = np.zeros(N_ineq_mc_trans)
+
+	_verify_dims([Aiq11, Aiq12, Aiq13, Aiq14], biq1, N_tot)
+
+	# upper bound mode counting
+	Aiq21 = Aiq11
+	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
+	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_lb_tot)
+	Aiq24 = scipy.sparse.coo_matrix( (-np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq25 = _coo_zeros( N_ineq_mc_trans, N_err)
+	biq2 = np.zeros(N_ineq_mc_trans)
+
+	_verify_dims([Aiq21, Aiq22, Aiq23, Aiq24, Aiq25], biq2, N_tot)
+
+	# lower control bounds
+	Aiq31 = -scipy.sparse.identity( N_u )
+	Aiq32 = _coo_zeros( N_ineq_control, N_tot - N_u )
+	biq3 = np.zeros(N_ineq_control)
+
+	_verify_dims([Aiq31, Aiq32], biq3, N_tot)
+
+	# upper control bounds
+	Aiq41 = scipy.sparse.identity(N_ineq_control)
+	Aiq42 = -scipy.sparse.identity(N_ineq_control)
+	Aiq43 = _coo_zeros(N_ineq_control, N + N_lb_tot + N_ub_tot + N_err)
+	biq4 = np.zeros(N_ineq_control)
+
+	_verify_dims([Aiq41, Aiq42, Aiq43], biq4, N_tot)
+
+	# set err > Kl - lb,  err > ub - Ku
+	Aiq51 = _coo_zeros(2, N_u + N_x)
+	Aiq52 = np.array([[ -1, 0, -1 ], [0, 1, -1]])
+	biq5  = np.array([ -Kl, Ku ])
+
+	_verify_dims([Aiq51, Aiq52], biq5, N_tot)
+
+	Aiq1 = scipy.sparse.bmat([ [ Aiq11, Aiq12, Aiq13, Aiq14 ]] )
+	Aiq2 = scipy.sparse.bmat([ [ Aiq21, Aiq22, Aiq23, Aiq24, Aiq25 ]] )
+	Aiq3 = scipy.sparse.bmat([ [ Aiq31, Aiq32 ]] )
+	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
+	Aiq5 = scipy.sparse.bmat([ [ Aiq51, Aiq52 ]] )
+
+	Aiq = scipy.sparse.bmat([ [Aiq1], [Aiq2], [Aiq3], [Aiq4], 
+							  [Aiq5] ])
+	biq = np.hstack([biq1, biq2, biq3, biq4, biq5])
+
+	# cost function
+	c = np.zeros(N_tot)
+	c[-1] = 1
+
+	end = time.time()
+	if verbosity >= 1: print "It took ", end - start, " to set up LP"
+	start = time.time()
+
+	if integer:
+		if verbosity >= 1: print "solving ILP..."
+		solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+		end = time.time()
+		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
+	else:
+		if verbosity >= 1: print "solving LP..."
+		lp_sln = solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
+		x_out = lp_sln['x']
+		end = time.time()
+		if verbosity >= 1: print "It took ", end - start, " to solve LP"
+
+	err_out = x_out[-1]
+
+	if verbosity >= 1:
+		print ""
+		print "Bound: ", err_out
+		print "Reach guaranteed: [", Kl-err_out, ", ", Ku+err_out, "]"
+		print "Steady state guaranteed: ", cycles_maxmin(G, cycle_set, mode, assignments)
+		print ""
+
+	sol = {}
+	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
+	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
+	sol['assignments'] = assignments
+	sol['cycles'] = cycle_set
+	sol['forbidden_nodes'] = forbidden_nodes
+
+	if verification:
+		for t in range(1,T+1):
+			# check that sol obeys dynamics up to time T
+			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-10))
+
+	return sol
+
+def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 1, verification = False):
+
+	if verbosity >= 3:
+		solvers.options['show_progress'] = True
+		solvers.options['mosek'] = {mosek.iparam.log: 1} 
+	else:
+		solvers.options['show_progress'] = False
+		solvers.options['mosek'] = {mosek.iparam.log: 0} 
+
 
 	if order_fcn == None:
 		nodelist = G.nodes()
@@ -242,18 +459,13 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	assert(len(G) == N / maxmode)
 
 	# fill out cycle set
-	if verbosity: print "generating cycles"
 	if len(cycle_set) == 0:
-		if True:
-			# find ranom cycles
-			while len(cycle_set) < 100:
-				cycle_set.append(random_cycle(G))
-		else:
-			# enumerate all simple cycles
-			for c in nx.simple_cycles(G):
-				if not set(forbidden_nodes) & set(c):
-					# only care about cycles not involving roots
-					cycle_set.append(c)
+		if verbosity >= 1: print "no cycles given, enumerating..."
+		# enumerate all simple cycles
+		for c in nx.simple_cycles(G):
+			if not set(forbidden_nodes) & set(c):
+				# only care about cycles not involving roots
+				cycle_set.append(c)
 
 
 	### SET UP LP ###
@@ -307,7 +519,7 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 
 	# Build equality constraints Aeq x = beq
 
-	if verbosity: print "setting up equality constraints"
+	if verbosity >= 1: print "setting up equality constraints"
 
 	# dynamics constraints
 	Aeq11 = _dyn_eq_mat(A,B,T)
@@ -364,7 +576,7 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 
 
 	# Build inequality constraints Aiq x <= biq
-	if verbosity: print "setting up inequality constraints"
+	if verbosity >= 1: print "setting up inequality constraints"
 
 	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
 									(1, N) )
@@ -467,22 +679,25 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	c[-1] = 1
 
 	end = time.time()
-	print "It took ", end - start, " to set up LP"
+	if verbosity >= 1: print "It took ", end - start, " to set up (I)LP"
+	start = time.time()
 
 	if integer:
-		solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq) )
+		if verbosity >= 1: print "solving ILP..."
+		solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+		end = time.time()
+		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
 	else:
+		if verbosity >= 1: print "solving LP..."
 		lp_sln = solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
 		x_out = lp_sln['x']
+		end = time.time()
+		if verbosity >= 1: print "It took ", end - start, " to solve LP"
 
 	err_out = x_out[-1]
 
-	if verbosity:
+	if verbosity >= 2:
 		print ""
-		print "Error: ", err_out
-		print "Guaranteed interval: [", K-err_out, ", ", K+err_out, "]"
-		print ""
-
 		print "### Cycles ###"
 
 	final_c = []
@@ -491,186 +706,35 @@ def synthesize2(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order
 	for i in range(len(cycle_set)):
 		alpha_i = list(x_out[index_ai(i): index_ai(i) + len(cycle_set[i])])
 		if sum( alpha_i ) > 1e-5:
-			if verbosity:
+			if verbosity >= 2:
+				print ""
 				print "Cycle: ", cycle_set[i]
 				print "Cycle mode-count: ", next(_cycle_rows(G,cycle_set[i], mode))
 				print "Assignment: ", alpha_i
+				print "Sum: ", sum(alpha_i)
+				print "Bounds: ", cycle_maxmin(G, cycle_set[i], mode, alpha_i)
 			final_c.append(cycle_set[i])
 			final_a.append(alpha_i)
 
-	sol = {}
+	if verbosity >= 1:
+		print ""
+		print "Error: ", err_out
+		print "Guaranteed interval: [", K-err_out, ", ", K+err_out, "]"
+		print "Steady state guaranteed: ", cycles_maxmin(G,final_c, mode, final_a)
+		print ""
 
+
+	sol = {}
 	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
 	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
 	sol['cycles'] = final_c
 	sol['assignments'] = final_a
 	sol['forbidden_nodes'] = forbidden_nodes
 
-	for t in range(1,T+1):
-		# check that sol obeys dynamics up to time T
-		assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-10))
-
-	return sol
-
-def synthesize(G, init, T, K, mode, forbidden_nodes = [], order_fcn = None, integer = True, verbosity = 0):
-
-	if order_fcn == None:
-		nodelist = G.nodes()
-		order_fcn = lambda v : nodelist.index(v)
-
-	A,B = lin_syst(G, order_fcn)
-	maxmode = _maxmode(G)
-	N = A.shape[1]
-
-	A_mos = _sparse_scipy_to_mosek(A)
-	B_mos = _sparse_scipy_to_mosek(B)
-
-	A_d = A.todense()
-	B_d = B.todense()
-	stacked_e = _sparse_scipy_to_mosek(_stacked_eye(G))
-
-	start = time.time()
-	M = Model("cycle_find") 
-
-	#########################################
-	######### Define variables ##############
-	#########################################
-
-	# control variables u(0), ... u(T-1)
-	u_t = []
-	for t in range(T):
-		if integer:
-			u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0), Domain.isInteger())) 
-		else:
-			u_t.append( M.variable("u[" + str(t) + "]", N, Domain.greaterThan(0.0))) 
-
-	# state variables x(0), ... x(T)
-	x_t = []
-	for t in range(T+1):
-		if integer:
-			x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0), Domain.isInteger()))
-		else:
-			x_t.append(M.variable("x[" + str(t) + "]", N, Domain.greaterThan(0.0)))
-
-	# cycle variables
-	c_i = []
-	alpha_i = []  # cycle assignments
-	Psi_i = []    # matrices cycle -> state
-	k_u_i = []    # upper mode counting bounds
-	k_l_i = []	  # lower mode counting bounds
-	for i, c in enumerate(nx.simple_cycles(G)):
-		if i > 100:
-			break
-		if not set(forbidden_nodes) & set(c):
-			# only care about cycles not involving roots
-			c_i.append(c)
-			if integer:
-				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0), Domain.isInteger()))
-			else:
-				alpha_i.append(M.variable("alpha_" + str(i), len(c), Domain.greaterThan(0.0)))
-			Psi_i.append(_sparse_scipy_to_mosek(_cycle_indices(G, c, order_fcn) ))
-			k_u_i.append(M.variable( 1, Domain.unbounded() ))
-			k_l_i.append(M.variable( 1, Domain.unbounded() ))
-
-	# error variables
-	k_u = M.variable(1, Domain.unbounded())
-	k_l = M.variable(1, Domain.unbounded())
-	err = M.variable("error", 1, Domain.greaterThan(0.))
-
-	#########################################
-	######### Define constraints ############
-	#########################################
-
-	# Constraint at t=0
-	M.constraint( Expr.mul(stacked_e, x_t[0]), Domain.equalsTo([float(i) for i in init]))
-	
-	# Dynamics constraints
-	mat = Matrix.sparse(1, N, [0 for i in range(len(G))], [(mode - 1)*len(G) + i for i in range(len(G))], [1. for i in range(len(G))])
-	for t in range(1, T+1):
-		M.constraint("dyn t=" + str(t), Expr.sub(x_t[t], Expr.add(Expr.mul(A_mos, x_t[t-1]), Expr.mul(B_mos, u_t[t-1])) ), Domain.equalsTo(0.))
-
-	# Mode-counting during transient phase
-	for t in range(T+1):
-		M.constraint( Expr.sub( k_u, Expr.mul(mat, x_t[t])), Domain.greaterThan(0.) )
-		M.constraint( Expr.sub( Expr.mul(mat, x_t[t]), k_l), Domain.greaterThan(0.) )
-
-		# don't enter forbidden nodes
-		for root in forbidden_nodes:
-			for m in range(1, maxmode+1):
-				M.constraint( x_t[t].index(_stateind(G, root, m, order_fcn)), Domain.equalsTo(0.) )
-
-	# Control constraints
-	for t in range(T):
-		# not larger than x
-		M.constraint( Expr.sub(x_t[t], u_t[t]), Domain.greaterThan(0.) )
-
-	# Equality at time T
-	Psi_stacked = Matrix.sparse([Psi_i])
-	alpha_stacked = Expr.vstack([alpha.asExpr() for alpha in alpha_i])
-	M.constraint( Expr.sub(Expr.mul(Psi_stacked, alpha_stacked), Expr.mul(stacked_e, x_t[T])), Domain.equalsTo(0.) )
-
-	# Bound assignments in [k_l_i[i], k_u_i[i]]
-	for i, c in enumerate(c_i):
-		Ac = DenseMatrix( _cycle_matrix(G, c, mode) )
-		M.constraint( Expr.sub(Expr.mul(Ac, alpha_i[i]), Expr.mul(k_l_i[i], [1. for j in range(len(c))]) ), Domain.greaterThan(0.) )
-		M.constraint( Expr.sub(Expr.mul(k_u_i[i], [1. for j in range(len(c))]), Expr.mul(Ac, alpha_i[i]) ), Domain.greaterThan(0.) )
-
-	# Set \sum k_l_i[i] <= K <= \sum k_u_i[i] 
-	k_u_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_u_i]) )
-	k_l_sum = Expr.sum(  Expr.vstack([k.asExpr() for k in k_l_i]) )
-	M.constraint( Expr.sub( k_u, k_u_sum ), Domain.greaterThan(0.) )
-	M.constraint( Expr.sub( k_l_sum, k_l ), Domain.greaterThan(0.) )
-
-	M.constraint( Expr.sub(err, Expr.sub(k_u, float(K))), Domain.greaterThan(0.) )
-	M.constraint( Expr.sub(err, Expr.sub(float(K), k_l)), Domain.greaterThan(0.) )
-
-	# Make sure number of systems is preserved (i.e. no transitions to out of domain!)
-	M.constraint( Expr.sum(x_t[T]), Domain.equalsTo( float(sum(init)) ) )
-
-	M.objective(ObjectiveSense.Minimize, err)
-
-	# Enable logger output
-	if verbosity:
-		M.setLogHandler(sys.stdout) 
-
-	end = time.time()
-	print "It took ", end - start, " to set up LP"
-
-	M.solve()
-
-	if verbosity:
-		print ""
-		print "Primal solution status: ", M.getPrimalSolutionStatus()  
-		print "Dual solution status: ", M.getDualSolutionStatus()  
-		print ""
-		print "Error: ", err.level()[0]
-		print "Guaranteed interval: [", K-err.level()[0], ", ", K+err.level()[0], "]"
-		print ""
-		print "### Cycles ###"
-
-	final_c = []
-	final_a = []
-	for i, alpha in enumerate(alpha_i):
-		if sum(alpha.level()) > 1e-5:
-			if verbosity:
-				print "Cycle: ", c_i[i]
-				print "Cycle mode-count: ", next(_cycle_rows(G,c_i[i], mode))
-				print "Cycle length: ", len(alpha.level())
-				print "Assignment: ", alpha.level()
-			final_c.append(c_i[i])
-			final_a.append(alpha.level())
-
-	for t in range(1,T+1):
-		# check that sol obeys dynamics up to time T
-		if (np.all(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()) > 1e-10)):
-			print "Warning, dynamics mismatch for ", np.max(np.abs(A.dot(x_t[t-1].level()) + B.dot(u_t[t-1].level()) - x_t[t].level()))
-
-	sol = {}
-	sol['states'] = np.array([np.array(x_t[t].level()) for t in range(T+1)]).transpose()
-	sol['controls'] = np.array([np.array(u_t[t].level()) for t in range(T)]).transpose()
-	sol['cycles'] = final_c
-	sol['assignments'] = final_a
-	sol['forbidden_nodes'] = forbidden_nodes
+	if verification:
+		for t in range(1,T+1):
+			# check that sol obeys dynamics up to time T
+			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-10))
 
 	return sol
 
@@ -705,7 +769,7 @@ def simulate(G, sol, order_fcn, nodelist = []):
 	for t in range(tmax):
 		u = controls.get_u(t, xvec[:,t])
 		uvec[:,t] = u
-		xvec[:,t+1] = A.dot(xvec[:,t]) + B.dot(u.flatten())
+		xvec[:,t+1] = A.dot(xvec[:,t]) + B.dot(u)
 
 	#################################
 	######### PLOT THE GRAPH ########
@@ -828,6 +892,9 @@ def _stateind(G, node, mode, order_fcn = None):
 		order_fcn = lambda v : nodelist.index(v)
 	return (mode - 1) * len(G) + order_fcn(node)
 
+def cyclequot(G, c, mode):
+	return float(sum(next(_cycle_rows(G, c, mode))))/len(c)
+
 def _cycle_matrix(G, cycle, mode):
 	return [row for row in _cycle_rows(G, cycle, mode)]
 
@@ -847,6 +914,13 @@ def _cycle_rows(G, C, mode):
 
 def _sum_modes(state, maxmode):
 	return np.sum([state[ i * len(state)/maxmode : (i+1) * len(state)/maxmode] for i in range(maxmode)], axis=0)
+
+def cycle_maxmin(G, cycle, mode, ass):
+	prod = np.dot(np.array(_cycle_matrix(G,cycle,mode)), ass)
+	return np.min(prod), np.max(prod)
+
+def cycles_maxmin(G, cycles, mode, assignments):
+	return sum(np.array([cycle_maxmin(G, c, mode, a) for c,a in zip(cycles, assignments)]), 0)
 
 def _psi_lower(G, cycle, assignment, mode):
 	return np.min([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])

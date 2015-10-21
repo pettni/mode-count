@@ -26,15 +26,29 @@ G.add_path([6,7,8,8], mode=1)
 init = [0, 1, 6, 4, 7, 10, 2, 0]
 
 T = 5 			# horizon
-mode_des = 19	# desired mode count over time
+mode_des = 15	# desired mode count over time
 mode = 1		# mode to count (1 or 2)
 
 forbidden_nodes = G.nodes_with_selfloops()
 
 # mode-counting synthesis
-mc_sol = synthesize2(G, init, T, mode_des, mode, forbidden_nodes = forbidden_nodes, integer = False, verbosity = 1)
+mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes = forbidden_nodes, integer = False, verbosity = 1)
 
-# simulate it on the graph!
-anim = simulate(G, mc_sol, lambda node : G.nodes().index(node))
-anim.save("example_simple_anim.mp4", fps=10)
-plt.show()
+nonint_cycles = mc_sol['cycles']
+nonint_assignments = mc_sol['assignments']
+int_assignments = make_integer(nonint_assignments)
+
+print mc_sol['controls']
+
+print cycles_maxmin(G,nonint_cycles, mode, nonint_assignments)
+print cycles_maxmin(G,nonint_cycles, mode, int_assignments)
+
+mc_sol2 = reach_cycles(G, init, T, mode, nonint_cycles, int_assignments, forbidden_nodes = forbidden_nodes, integer = False, 
+			verbosity = 1)
+
+print mc_sol2['controls']
+
+# # simulate it on the graph!
+# anim = simulate(G, mc_sol, lambda node : G.nodes().index(node))
+# anim.save("example_simple_anim.mp4", fps=10)
+# plt.show()

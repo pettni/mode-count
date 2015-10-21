@@ -9,6 +9,7 @@ from numpy.linalg import norm
 from scipy.linalg import expm
 
 from modecount import *
+from make_integer import make_integer
 
 # Define an abstraction
 data = {}
@@ -32,8 +33,8 @@ ab = Abstraction(lb, ub, eta, tau)
 
 # Verify that abstraction is 0.3-approximate bisimulation
 # with respect to both KL functions
-assert(ab.verify_bisim(kl1, 0.3))
-assert(ab.verify_bisim(kl2, 0.3))
+verify_bisim( kl1, tau, eta, 0.3 )
+verify_bisim( kl2, tau, eta, 0.3 )
 
 # add modes to abstraction
 ab.add_mode(vf1)
@@ -59,8 +60,19 @@ order_fcn = ab.node_to_idx
 
 # mode-counting synthesis
 mc_sol = synthesize(G, init, T, mode_des, mode, 
-			forbidden_nodes = forbidden_nodes, order_fcn = order_fcn, 
-			verbosity = 0)
+			forbidden_nodes = forbidden_nodes, integer = False, order_fcn = order_fcn, 
+			verbosity = 1)
+
+nonint_cycles = mc_sol['cycles']
+nonint_assignments = mc_sol['assignments']
+int_assignments = make_integer(nonint_assignments)
+
+print cycles_maxmin(G,nonint_cycles, mode, nonint_assignments)
+print cycles_maxmin(G,nonint_cycles, mode, int_assignments)
+
+mc_sol2 = reach_cycles(G, init, T, mode, nonint_cycles, int_assignments, forbidden_nodes = forbidden_nodes, integer = False, order_fcn = order_fcn, 
+			verbosity = 1)
+
 
 # simulate it on the connected subset of the graph!
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
