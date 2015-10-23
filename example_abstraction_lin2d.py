@@ -14,8 +14,8 @@ from make_integer import make_integer
 # Define an abstraction
 data = {}
 # Define a vector fields
-vf1 = lambda x : [-(x[0]-1.05) + x[1], -(x[0]-1.05) - x[1]]
-vf2 = lambda x : [-(x[0]+1.05) + x[1], -(x[0]+1.05) - x[1]]
+vf1 = lambda x : [-(x[0]-1.0) + x[1], -(x[0]-1.0) - x[1]]
+vf2 = lambda x : [-(x[0]+1.0) + x[1], -(x[0]+1.0) - x[1]]
               
 # Define a KL function beta(r,s) s.t. || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
 kl1 = lambda r,s : r * norm( expm(s*np.array([[-1,  1], [-1, -1]])) , np.inf)

@@ -44,6 +44,7 @@ import mosek
 
 from random_cycle import random_cycle
 from make_integer import make_integer
+from solve_gurobi import solve_mip
 
 lp_solver = 'mosek'
 np.set_printoptions(precision=2, suppress=True)
@@ -244,7 +245,7 @@ def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [],
 
 	# optimization vector is 
 	# 
-	#  [ u[0], ..., u[T-1], x[0], ..., x[T], a[0], ..., a[C-1], Kl[1], ..., Kl[C], Ku[1], ..., Ku[C], Kl, Ku, err ]
+	#  [ u[0], ..., u[T-1], x[0], ..., x[T], Kl, Ku, err ]
 	#
 
 	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
@@ -391,7 +392,10 @@ def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [],
 	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
 	Aiq5 = scipy.sparse.bmat([ [ Aiq51, Aiq52 ]] )
 
-	Aiq = scipy.sparse.bmat([ [Aiq1], [Aiq2], [Aiq3], [Aiq4], 
+	Aiq = scipy.sparse.bmat([ [Aiq1],
+							  [Aiq2],
+							  [Aiq3], 
+							  [Aiq4], 
 							  [Aiq5] ])
 	biq = np.hstack([biq1, biq2, biq3, biq4, biq5])
 
@@ -405,7 +409,8 @@ def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [],
 
 	if integer:
 		if verbosity >= 1: print "solving ILP..."
-		solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+		# solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+		x_out, feas = solve_mip(c, Aiq, biq, Aeq, beq, set(range(N_u)))
 		end = time.time()
 		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
 	else:
@@ -434,11 +439,11 @@ def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [],
 	if verification:
 		for t in range(1,T+1):
 			# check that sol obeys dynamics up to time T
-			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-10))
+			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-5))
 
 	return sol
 
-def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 1, verification = False):
+def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 1, verification = False, factor=1.):
 
 	if verbosity >= 3:
 		solvers.options['show_progress'] = True
@@ -467,9 +472,7 @@ def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_
 				# only care about cycles not involving roots
 				cycle_set.append(c)
 
-
 	### SET UP LP ###
-
 	start = time.time()
 
 	# optimization vector is 
@@ -585,7 +588,7 @@ def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_
 	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
 	Aiq12 = scipy.sparse.block_diag( (-sum_mode_mat,) * (T+1) )
 	Aiq13 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub)
-	Aiq14 = scipy.sparse.coo_matrix( (np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq14 = scipy.sparse.coo_matrix( ((1/factor) * np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
 	Aiq15 = _coo_zeros( N_ineq_mc_trans, N_ub_tot + N_err)
 	biq1 = np.zeros(N_ineq_mc_trans)
 
@@ -595,7 +598,7 @@ def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_
 	Aiq21 = Aiq11
 	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
 	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub + N_lb_tot)
-	Aiq24 = scipy.sparse.coo_matrix( (-np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq24 = scipy.sparse.coo_matrix( (- factor * np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
 	Aiq25 = _coo_zeros( N_ineq_mc_trans, N_err)
 	biq2 = np.zeros(N_ineq_mc_trans)
 
@@ -684,7 +687,8 @@ def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_
 
 	if integer:
 		if verbosity >= 1: print "solving ILP..."
-		solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+		# solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+		x_out, feas = solve_mip(c, Aiq, biq, Aeq, beq, set(range(N_u)))
 		end = time.time()
 		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
 	else:
@@ -716,20 +720,20 @@ def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_
 			final_c.append(cycle_set[i])
 			final_a.append(alpha_i)
 
-	if verbosity >= 1:
-		print ""
-		print "Error: ", err_out
-		print "Guaranteed interval: [", K-err_out, ", ", K+err_out, "]"
-		print "Steady state guaranteed: ", cycles_maxmin(G,final_c, mode, final_a)
-		print ""
-
-
 	sol = {}
 	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
 	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
 	sol['cycles'] = final_c
 	sol['assignments'] = final_a
 	sol['forbidden_nodes'] = forbidden_nodes
+
+	if verbosity >= 1:
+		print ""
+		print "Error: ", err_out
+		print "Guaranteed interval: [", K-err_out, ", ", K+err_out, "]"
+		print "Transient interval: ", states_maxmin(G, sol['states'], mode)
+		print "Steady state guaranteed: ", cycles_maxmin(G,final_c, mode, final_a)
+		print ""
 
 	if verification:
 		for t in range(1,T+1):
@@ -921,6 +925,10 @@ def cycle_maxmin(G, cycle, mode, ass):
 
 def cycles_maxmin(G, cycles, mode, assignments):
 	return sum(np.array([cycle_maxmin(G, c, mode, a) for c,a in zip(cycles, assignments)]), 0)
+
+def states_maxmin(G, states, mode):
+	modecount = np.sum(states[(mode-1)*len(G):mode*len(G), :], 0)
+	return [np.min(modecount), np.max(modecount)]
 
 def _psi_lower(G, cycle, assignment, mode):
 	return np.min([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])
