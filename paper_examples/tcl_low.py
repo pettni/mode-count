@@ -25,8 +25,8 @@ theta_r = 22.5
 delta = 1
 
 # mode counting synthesis parameters
-T = 15 			# horizon
-mode_des = 3100	# desired mode count over time
+T = 20 			# horizon
+mode_des = 3200	# desired mode count over time
 mode = 1		# mode to count (1 or 2)
 
 # Abstraction parameters

@@ -3,7 +3,7 @@ import scipy.sparse
 
 from gurobipy import *
 
-TIME_LIMIT = 240
+TIME_LIMIT = 10 * 3600
 
 def solCallback(model, where):
 	if where == GRB.callback.MIPSOL:

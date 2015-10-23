@@ -471,7 +471,7 @@ def synthesize(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_
 			if not set(forbidden_nodes) & set(c):
 				# only care about cycles not involving roots
 				cycle_set.append(c)
-
+		if verbosity >= 1: print "finished enumerating"
 	### SET UP LP ###
 	start = time.time()
 
