@@ -14,15 +14,11 @@ def casc_round(list):
 		fp_total += fp
 		int_total += ret[i]
 
-	assert(round(sum(list)) == round(sum(ret)) )
-
 	return ret
 
 def make_integer(assignments):
 
 	ass_sums = [sum(a) for a in assignments]
-	total_sum = sum([sum(a) for a in assignments])
-
 	rounded_sums = casc_round(ass_sums)
 
 	for ass, int_sum in zip(assignments, rounded_sums):
@@ -32,3 +28,12 @@ def make_integer(assignments):
 
 	return [casc_round(ass) for ass in assignments]
 
+def make_avg_integer(assignments):
+
+	ass_sums = [sum(a) for a in assignments]			# sum of assignments
+	rounded_sums = casc_round(ass_sums) 				# round assignment sums to integers
+
+	# create averaged assignments
+	avg_assignments = [ [rounded_sums[i]/len(assignments[i])] * len(assignments[i]) for i in range(len(assignments)) ]
+
+	return [casc_round(ass) for ass in avg_assignments]

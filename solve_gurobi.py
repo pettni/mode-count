@@ -1,9 +1,24 @@
 import numpy as np
 import scipy.sparse
 
+from cvxopt import matrix, spmatrix, solvers
+import cvxopt.msk as msk
+
+import mosek
+
 from gurobipy import *
 
 TIME_LIMIT = 10 * 3600
+
+solvers.options['show_progress'] = False
+solvers.options['mosek'] = {mosek.iparam.log: 0} 
+
+def _solve_mosek(c,Aiq,biq,Aeq,beq,J):
+	solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+	sol = {}
+	sol['x'] = x_out
+	sol['status'] = solsta
+	return sol
 
 def solCallback(model, where):
 	if where == GRB.callback.MIPSOL:
@@ -12,11 +27,7 @@ def solCallback(model, where):
 		if solcnt > 0 and runtime > TIME_LIMIT:
 			model.terminate()
 
-def solve_mip(c,Aiq,biq,Aeq,beq, J = None):
-
-	assert(Aiq.shape[1] == Aeq.shape[1])
-	assert(Aiq.shape[0] == len(biq))
-	assert(Aeq.shape[0] == len(beq))
+def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
 
 	num_var = Aiq.shape[1]
 
@@ -63,23 +74,37 @@ def solve_mip(c,Aiq,biq,Aeq,beq, J = None):
 
    	m.update()
    	m.optimize(solCallback)
-	# if m.status == gurobipy.GRB.status.OPTIMAL:
-   	return np.array([v.x for v in x]), m.objVal
-	# else:
-	   	# print "solution status: ", m.status
-		# return None
+
+   	sol = {}
+   	if m.status == gurobipy.GRB.status.OPTIMAL:
+	   	sol['x'] = np.array([v.x for v in x])
+   	sol['status'] = m.status
+   	sol['primal objective'] = m.objVal
+
+   	return sol
+
+def solve_lp(c,Aiq,biq,Aeq,beq):
+	return solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
+
+def solve_mip(c,Aiq,biq,Aeq,beq, J = None, solver='gurobi'):
+
+	assert(Aiq.shape[1] == Aeq.shape[1])
+	assert(Aiq.shape[0] == len(biq))
+	assert(Aeq.shape[0] == len(beq))
+
+	if J == None:
+		J = range(num_var)
+
+	if solver == 'gurobi':
+		return _solve_gurobi(c,Aiq,biq,Aeq,beq,J)
+	elif solver == 'mosek':
+		return _solve_mosek(c,Aiq,biq,Aeq,beq,J)
 
 
-def main():
-	c = np.array([-1,0], dtype=float)
+def _sparse_scipy_to_mosek(A):
+	A_coo = A.tocoo()
+	return Matrix.sparse(A_coo.shape[0], A_coo.shape[1], list(A_coo.row.astype(int)), list(A_coo.col.astype(int)), list(A_coo.data.astype(float)))
 
-	Aiq = scipy.sparse.coo_matrix( ((1,1), ((0,1), (0,1))), (2,2), dtype=float)
-	biq = np.array([4,4])
-
-	Aeq = scipy.sparse.coo_matrix( ((1,2), ((0,0), (0,1))), (1,2), dtype=float)
-	beq = np.array([2])
-
-	sol = solve_mip(c, Aiq, biq, Aeq, beq, [0,1])
-	print sol 
-if __name__ == '__main__':
-	main()
+def _sparse_scipy_to_cvxopt(A):
+	A_coo = A.tocoo()
+	return spmatrix(A_coo.data.astype(float), A_coo.row.astype(int), A_coo.col.astype(int), (A_coo.shape[0], A_coo.shape[1]))

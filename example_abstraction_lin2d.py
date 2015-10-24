@@ -59,24 +59,28 @@ forbidden_nodes = G.nodes_with_selfloops()
 order_fcn = ab.node_to_idx
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, 
-			forbidden_nodes = forbidden_nodes, integer = False, order_fcn = order_fcn, 
-			verbosity = 1)
+mc_sol = synthesize_feas(G, init, T, 26, 26, mode, 
+			forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
+			verbosity = 3)
 
-nonint_cycles = mc_sol['cycles']
-nonint_assignments = mc_sol['assignments']
-int_assignments = make_integer(nonint_assignments)
+mc_sol = reach_cycles_feas(G, init, T, mode, 26, 26, mc_sol['cycles'], mc_sol['assignments'],
+			forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
+			verbosity = 3)
 
-print cycles_maxmin(G,nonint_cycles, mode, nonint_assignments)
-print cycles_maxmin(G,nonint_cycles, mode, int_assignments)
 
-mc_sol2 = reach_cycles(G, init, T, mode, nonint_cycles, int_assignments, forbidden_nodes = forbidden_nodes, integer = False, order_fcn = order_fcn, 
-			verbosity = 1)
+# nonint_cycles = mc_sol['cycles']
+# nonint_assignments = mc_sol['assignments']
+# int_assignments = make_integer(nonint_assignments)
 
+# print cycles_maxmin(G,nonint_cycles, mode, nonint_assignments)
+# print cycles_maxmin(G,nonint_cycles, mode, int_assignments)
+
+# mc_sol2 = reach_cycles(G, init, T, mode, nonint_cycles, int_assignments, forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
+# 			verbosity = 1)
 
 # simulate it on the connected subset of the graph!
-strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
-anim = simulate(G, mc_sol, order_fcn, strongly_conn_nodes)
-anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
+# strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
+# anim = simulate(G, mc_sol, order_fcn, strongly_conn_nodes)
+# anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
 
-plt.show()
+# plt.show()
