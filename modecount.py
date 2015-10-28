@@ -904,13 +904,6 @@ def synthesize_feas(G, init, T, Kl, Ku, mode, cycle_set = [], forbidden_nodes = 
 
 def synthesize_opt(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 1, verification = False):
 
-	if verbosity >= 3:
-		solvers.options['show_progress'] = True
-		solvers.options['mosek'] = {mosek.iparam.log: 1} 
-	else:
-		solvers.options['show_progress'] = False
-		solvers.options['mosek'] = {mosek.iparam.log: 0} 
-
 	if order_fcn == None:
 		nodelist = G.nodes()
 		order_fcn = lambda v : nodelist.index(v)
@@ -1056,7 +1049,7 @@ def synthesize_opt(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], or
 	Aiq21 = Aiq11
 	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
 	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub + N_lb_tot)
-	Aiq24 = scipy.sparse.coo_matrix( (- factor * np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
+	Aiq24 = scipy.sparse.coo_matrix( (- np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
 	Aiq25 = _coo_zeros( N_ineq_mc_trans, N_err)
 	biq2 = np.zeros(N_ineq_mc_trans)
 
@@ -1154,6 +1147,7 @@ def synthesize_opt(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], or
 		end = time.time()
 		if verbosity >= 1: print "It took ", end - start, " to solve LP"
 
+        x_out = lp_sln['x']
 	err_out = x_out[-1]
 
 	if verbosity >= 2:

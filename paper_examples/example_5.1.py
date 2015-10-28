@@ -81,9 +81,13 @@ while len(cycle_set) < 100:
 
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, cycle_set = cycle_set,
-			forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
-			verbosity = 2)
+#mc_sol = synthesize_feas(G, init, T, Kl=7000, Ku=7000, mode=mode, cycle_set = cycle_set,
+#		forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
+#		verbosity = 2)
+
+mc_sol = synthesize_opt(G, init, T, mode_des, mode, cycle_set = cycle_set,
+                        forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn,
+                        verbosity = 3)
 
 H = max(nx.strongly_connected_component_subgraphs(G), key=len)
 
@@ -106,7 +110,7 @@ def edges(cycle):
 
 nx.draw_networkx_nodes(H, pos, nodelist = list(set.union(*[set(cyc) for cyc in mc_sol['cycles'] ])), node_color = 'black', alpha=0.5)
 
-nx.draw_networkx_edges(H, pos, edgelist = edges(mc_sol['cycles'][0]) , edge_color = 'red', style='dashed', width=1.5)
+nx.draw_networkx_edges(H, pos, edgelist = edges(mc_sol['cycles'][0]) , edge_color = 'red', style='solid', width=1.5)
 nx.draw_networkx_edges(H, pos, edgelist = edges(mc_sol['cycles'][1]) , edge_color = 'green', style='solid', width=1.5)
 nx.draw_networkx_edges(H, pos, edgelist = edges(mc_sol['cycles'][2]) , edge_color = 'blue', style='solid', width=1.5)
 nx.draw_networkx_edges(H, pos, edgelist = edges(mc_sol['cycles'][3]) , edge_color = 'yellow', style='solid', width=1.5)
