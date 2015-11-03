@@ -41,7 +41,7 @@ from random_cycle import random_cycle
 from make_integer import make_integer, make_avg_integer
 from solve_gurobi import solve_mip, solve_lp
 
-np.set_printoptions(precision=2, suppress=True)
+np.set_printoptions(precision=4, suppress=True)
 
 class Abstraction(object):
 	""" 
@@ -207,6 +207,453 @@ def lin_syst(G, order_fcn = None):
 	B = scipy.sparse.bmat([ [Ti for i in range(len(T_list))] for Ti in T_list ]) - 2*A
 
 	return A,B
+
+def _ux_constraints(G, init, T, order_fcn, forbidden_nodes = []):
+	# specify the following basic constraints for control and state
+	#
+	#  - initial
+	#  - no exit
+	#  - dynamics
+	#  - control bounds
+	#  - forbidden nodes
+
+	#  variable vector X = u[0], ..., u[T-1], x[0], ..., x[T]
+
+	# return Aeq, beq, Aiq, biq s.t.
+	# 	Aeq X = beq, Aiq X <= biq
+	# enforces these constraints
+
+	A,B = lin_syst(G, order_fcn)
+	maxmode = _maxmode(G)
+	N = A.shape[1]
+	assert(len(G) == N / maxmode)
+
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	###############################
+	#### Dynamics constraints #####
+	###############################
+	N_eq_dyn = N * T 	  # dynamics
+	Aeq = _dyn_eq_mat(A,B,T)
+	beq = np.zeros( N_eq_dyn )
+
+	###############################
+	##### Initial constraints #####
+	###############################
+	Aeq = _insert_block( Aeq, _stacked_eye(G), N_u )
+	beq = np.hstack( [beq, init ] )
+
+	###############################
+	########### No exit ###########
+	###############################
+	Aeq = _insert_block(Aeq, np.ones([1,N]), N_u + N*T)
+	beq = np.hstack([beq, [np.sum(init)]])
+
+	###############################
+	#### No forbidden nodes #######
+	###############################
+	if len(forbidden_nodes) > 0:
+		N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
+		Aeq = _insert_block(Aeq, 
+			scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
+									 	(range(N_eq_forbidden) , 
+			 							[ t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
+										) 
+									 ),	
+			 						(N_eq_forbidden, N_x) ), 
+						    N_u )
+		beq = np.hstack([beq, np.zeros(N_eq_forbidden)])
+
+	###############################
+	#### Lower control bounds #####
+	###############################
+	Aiq = scipy.sparse.bmat([[-scipy.sparse.identity( N_u ), _coo_zeros(N_u, N_x)]])
+	biq = np.zeros(N_u)
+
+	###############################
+	#### Upper control bounds #####
+	###############################
+	Aiq = _insert_block(Aiq, 
+			scipy.sparse.bmat([[scipy.sparse.identity(N_u), 
+							   -scipy.sparse.identity(N_u)]]),
+			0)
+	biq = np.hstack([biq, np.zeros(N_u)])
+
+	return Aeq, beq, Aiq, biq
+
+def _prefix_mc(G, T, N, mode, lb, ub):
+	# Enforce mode-counts during prefix phase
+	# 
+	# Variable vector : x[0], ..., x[T]
+
+	N_ineq_mc_prefix = T+1
+	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), (1, N) )
+	prefix_mc_x_block = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
+
+	return scipy.sparse.bmat([[-prefix_mc_x_block], [prefix_mc_x_block]]), \
+		   np.hstack([ -lb * np.ones(N_ineq_mc_prefix), ub * np.ones(N_ineq_mc_prefix) ])
+
+def _suffix_mc(G, cycle_set, mode):
+	# Enforce mode-counts during suffix phase
+	# 
+	# Variable vector : a[0], ..., a[C-1], lb[0], ..., lb[C-1], ub[0], ..., ub[C-1]
+
+	# number of inequalities for lb/ ub
+	N_ineq_cycle_bound = sum([len(cycle) for cycle in cycle_set])
+	N_bounds = len(cycle_set)
+
+	cycle_matrix = scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
+	bound_matrix = scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
+	zero_matrix = _coo_zeros( N_ineq_cycle_bound, N_bounds )
+
+	# lower cycle bounds: lb_i < cycle_matrix_i * ass_i
+	# upper cycle bounds: cycle_matrix_i * ass_i < ub_i
+
+	Aiq = scipy.sparse.bmat([[-cycle_matrix, bound_matrix, zero_matrix], 
+					         [cycle_matrix, zero_matrix, -bound_matrix]])
+	biq = np.zeros(2 * N_ineq_cycle_bound)
+
+	return Aiq, biq
+
+def _clean_cycle_set(cycle_set, forbidden_nodes):
+	new_cycle_set = []
+
+	# remove cycles that have forbidden nodes
+	forbidden_nodes_set = set(forbidden_nodes)
+	for cycle in cycle_set:
+		if len( forbidden_nodes_set.intersection(set(cycle))) == 0:
+			new_cycle_set.append(cycle) 
+
+	return new_cycle_set
+
+def _print_sol(G, mode, sol):
+
+	for cycle, ass in zip(sol['cycles'], sol['assignments']):
+		print ""
+		print "Cycle: ", cycle
+		print "Cycle mode-count: ", next(_cycle_rows(G,cycle, mode))
+		print "Assignment: ", np.array(ass)
+		print "Sum: ", sum(ass)
+		print "Bounds: ", np.array(cycle_maxmin(G, cycle, mode, ass))
+
+	print ""
+	print "Prefix interval: ", np.array(states_maxmin(G, sol['states'], mode))
+	print "Suffix interval: ", np.array(cycles_maxmin(G, sol['cycles'], mode, sol['assignments']))
+	print ""
+
+def _verify_prefix(G, T, order_fcn, states, controls):
+	A,B = lin_syst(G, order_fcn)
+	for t in range(1,T+1):
+		assert (np.all(np.abs(A.dot(states[:,t-1]) + B.dot(controls[:,t-1]) - states[:,t]) < 1e-10))
+
+def _extract_solution_state(sol_vector, N, T):
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	sol = {}
+	sol['controls'] = np.array(sol_vector[:N_u]).reshape(T,N).transpose()
+	sol['states'] = np.array(sol_vector[N_u:N_u+N_x]).reshape(T+1,N).transpose()
+	return sol
+
+def _extract_solution(sol_vector, N, T, cycle_set):
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	sol = _extract_solution_state(sol_vector, N, T)
+	sol['cycles'] = []
+	sol['assignments'] = []
+
+	index_ai =  lambda i : N_u + N_x + sum([len(cycle_set[ii]) for ii in range(i) ])  	# starting index for a[i], i = 0, ..., C-1
+	for i in range(len(cycle_set)):
+		alpha_i = list(sol_vector[index_ai(i): index_ai(i) + len(cycle_set[i])])
+		if sum( alpha_i ) > 1e-5:
+			sol['cycles'].append(cycle_set[i])
+			sol['assignments'].append(alpha_i)
+	return sol
+
+def _extract_arguments(problem_data):
+	G = problem_data['graph']
+	T = problem_data['horizon']
+	N = len(G) * _maxmode(G)
+
+	# Integer program?
+	try: ilp = problem_data['ilp']
+	except: ilp = True
+
+	try: order_fcn = problem_data['order_function']
+	except: print "no order function provided, may be slow"; order_fcn = G.nodes().index
+
+	try: forbidden_nodes = problem_data['forbidden_nodes'] 
+	except: print "no forbidden nodes given"; forbidden_nodes = []
+
+	return G, T, N, ilp, order_fcn, forbidden_nodes
+
+def prefix_feasible(problem_data, verbosity = 1):
+	'''
+Define and solve the prefix part of a mode-counting 
+synthesis problem (requires a given suffix part)
+ 
+Inputs:
+    
+    problem_data: dictionary with the following fields:
+    'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
+                         class: networkx.DiGraph
+    'init'            : initial configuration in G
+                         type: list of length len(G)    
+    'horizon'         : integer representing length of strategy prefix part
+                         type: int
+    'cycle_set'       : a list of cycles in G
+                         type: list of lists
+    'assignments'     : assignments to 'cycle_set'
+                         type: list of lists
+    'mode'            : mode to count
+                         type: int
+    'lb'              : lower mode-counting bound
+                         type: int
+    'ub'              : upper mode-counting bound
+                         type: int
+    'lb_prefix'       : lower mode-counting bound in prefix phase (optional)
+                         type: int
+                         Default: same as 'lb'
+    'ub_prefix'       : upper mode-counting bound in prefix phase (optional)
+                         type: int
+                         Default: same as 'ub'
+    'order function'  : a function that is a bijection that maps nodes in G to integers [0, 1, ..., N]  (optional)
+                        If (an efficient) function is defined, it will improve performance. 
+                         class: lambda
+                         Defaults to G.nodes().index
+    'forbidden nodes' : nodes in G that can not be visited (optional)
+                         type: list
+                         Default: []
+    'ilp'             : if true, solve as ILP (optional)
+                         class: bool
+                         Default: true
+
+   verbosity: level of verbosity
+    
+Output:    
+  solution_data: a dictionary with the following fields:
+    'controls'        : prefix part u of strategy, u[:,t] is control at time t
+                         type: np.array
+    'states'          : states x generated by u, x[:,t] is state at time t
+                         type: np.array
+    'cycles'          : suffix cycles
+                         type: list
+    'assignments'     : suffix assignments
+                         type list
+	'''
+
+	G, T, N, ilp, order_fcn, forbidden_nodes = _extract_arguments(problem_data)
+
+	# variables: u[0], ..., u[T-1], x[0], ..., x[T]
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	N_tot = N_u + N_x
+
+	if verbosity: lp_start = time.time(); print "Setting up LP.."
+	
+	################################
+	# Initialize basic constraints #
+	################################
+	Aeq, beq, Aiq, biq = _ux_constraints(G, problem_data['init'], T, order_fcn, forbidden_nodes)
+
+	###############################
+	##### Time T constraints ######
+	###############################
+	Psi_mats = [_cycle_indices(G, cycle, order_fcn) for cycle in problem_data['cycle_set']]
+	Aeq = _insert_block( Aeq, _stacked_eye(G), N_u + N*T )
+	beq = np.hstack([beq, np.sum( [ _cycle_indices(G, cycle, order_fcn).dot(ass) for cycle, ass in zip( problem_data['cycle_set'], problem_data['assignments'] ) ], 0)])
+
+	###############################
+	##### Prefix mode-count #######
+	###############################
+	Aiq_new, biq_new = _prefix_mc(G, T, N, problem_data['mode'], problem_data['lb'], problem_data['ub'])
+	Aiq = _insert_block(Aiq, Aiq_new, N_u )
+	biq = np.hstack([biq, biq_new])
+	
+	if verbosity >= 1: print "It took ", time.time() - lp_start, " to set up (I)LP"
+
+	##############################################################
+	##############################################################
+	##############################################################
+
+	if verbosity >= 1: print "solving (I)LP..."; solve_start = time.time()
+	
+	if ilp: lp_sln = solve_mip(np.zeros(N_tot), Aiq, biq, Aeq, beq, set(range(N_u)))
+	else: lp_sln = solve_lp(np.zeros(N_tot), Aiq, biq, Aeq, beq)
+	
+	if verbosity >= 1: print "It took ", time.time() - solve_start, " to solve (I)LP"
+
+	sol = _extract_solution_state(lp_sln['x'], N, T)
+	sol['assignments'] = problem_data['assignments']
+	sol['cycles'] = problem_data['cycle_set']
+
+	if verbosity:
+		_print_sol(G, problem_data['mode'], sol)
+
+	if verification:
+		_verify_prefix(G, T, order_fcn, sol['states'], sol['controls'])
+
+	return sol
+
+def prefix_suffix_feasible(problem_data, verbosity = 1):
+	'''
+Define and solve a mode-counting synthesis problem
+with a prefix-suffix strategy.
+ 
+Inputs:
+    
+  problem_data: dictionary with the following fields:
+    'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
+                         class: networkx.DiGraph
+    'init'            : initial configuration in G
+                         type: list of length len(G)    
+    'horizon'         : integer representing length of strategy prefix part
+                         type: int
+    'cycle_set'       : a list of cycles in G
+                         type: list of lists
+    'mode'            : mode to count
+                         type: int
+    'lb'              : lower mode-counting bound
+                         type: int
+    'ub'              : upper mode-counting bound
+                         type: int
+    'lb_prefix'       : lower mode-counting bound in prefix phase (optional)
+                         type: int
+                         Default: same as 'lb'
+    'ub_prefix'       : upper mode-counting bound in prefix phase (optional)
+                         type: int
+                         Default: same as 'ub'
+    'order function'  : a function that is a bijection that maps nodes in G to integers [0, 1, ..., N]  (optional)
+                        If (an efficient) function is defined, it will improve performance. 
+                         class: lambda
+                         Defaults to G.nodes().index
+    'forbidden nodes' : nodes in G that can not be visited (optional)
+                         type: list
+                         Default: []
+    'ilp'             : if true, solve as ILP (optional)
+                         class: bool
+                         Default: true
+
+  verbosity: level of verbosity
+    
+Output:    
+  solution_data: a dictionary with the following fields:
+    'controls'        : prefix part u of strategy, u[:,t] is control at time t
+                         type: np.array
+    'states'          : states x generated by u, x[:,t] is state at time t
+                         type: np.array
+    'cycles'          : suffix cycles
+                         type: list
+    'assignments'     : suffix assignments
+                         type list
+ 
+Example: see example_simple.py
+'''
+
+	G, T, N, ilp, order_fcn, forbidden_nodes = _extract_arguments(problem_data)
+
+	# clean cycle set from forbidden nodes
+	cycle_set = _clean_cycle_set(problem_data['cycle_set'], forbidden_nodes)
+
+	# variables: u[0], ..., u[T-1], x[0], ..., x[T], a[0], ..., a[C-1], 
+	#		     lb[0], ..., lb[C-1], ub[0], ... ub[C-1]
+	N_u 	= T * N				# input vars
+	N_x     = (T+1) *N 			# state vars
+	N_cycle_tot = sum([len(cycle) for cycle in cycle_set])	# cycle vars
+	N_bound 	= len(cycle_set)	# lb/ub vars
+
+	N_tot = N_u + N_x + N_cycle_tot + 2 * N_bound
+
+	print "Setting up LP.. \n"
+	lp_start = time.time()
+
+	################################
+	# Initialize basic constraints #
+	################################
+	Aeq, beq, Aiq, biq = _ux_constraints(G, problem_data['init'], T, order_fcn, forbidden_nodes)
+	Aeq = scipy.sparse.bmat([[ Aeq, _coo_zeros(Aeq.shape[0], N_cycle_tot + 2 * N_bound) ]])
+	Aiq = scipy.sparse.bmat([[ Aiq, _coo_zeros(Aiq.shape[0], N_cycle_tot + 2 * N_bound) ]])
+
+	###############################
+	##### Time T constraints ######
+	###############################
+	Psi_mats = [_cycle_indices(G, cycle, order_fcn) for cycle in cycle_set]
+	Aeq = _insert_block( Aeq, scipy.sparse.bmat([[_stacked_eye(G), -scipy.sparse.bmat([ Psi_mats ])]]), N_u + N*T )
+	beq = np.hstack([beq, np.zeros(len(G))])
+
+	###############################
+	##### Prefix mode-count #######
+	###############################
+	try:
+		lb_prefix = problem_data['lb prefix']
+		ub_prefix = problem_data['ub prefix']
+	except:
+		lb_prefix = problem_data['lb']
+		ub_prefix = problem_data['ub']
+
+	Aiq_new, biq_new = _prefix_mc(G, T, N, problem_data['mode'], lb_prefix, ub_prefix)
+	Aiq = _insert_block(Aiq, Aiq_new, N_u )
+	biq = np.hstack([biq, biq_new])
+
+	###############################
+	##### Suffix mode-count #######
+	###############################
+
+	# Individual cycles bounds
+	Aiq_new, biq_new = _suffix_mc(G, cycle_set, problem_data['mode'])
+	Aiq = _insert_block(Aiq, Aiq_new, N_u + N_x)
+	biq = np.hstack([biq, biq_new])
+
+	# Aggregate cycle bounds: sum(ub) < ub_tot, lb_tot < sum(lb)
+	Aiq_new = scipy.sparse.block_diag( (-np.ones([1, N_bound]), np.ones([1, N_bound])) )
+	Aiq = _insert_block(Aiq, Aiq_new, N_u + N_x + N_cycle_tot)
+	biq = np.hstack([biq, np.array([ -problem_data['lb'], problem_data['ub'] ]) ])
+
+	###############################
+	#### Positive assignments #####
+	###############################
+	Aiq = _insert_block(Aiq, -scipy.sparse.identity( N_cycle_tot  ), N_u + N_x)
+	biq = np.hstack([biq, np.zeros(N_cycle_tot )])
+
+	if verbosity >= 1: time.time(); print "It took ", time.time() - lp_start, " to set up (I)LP"
+
+	##############################################################
+	##############################################################
+	##############################################################
+
+	if verbosity >= 1: print "solving (I)LP..."; solve_start = time.time()
+	
+	if ilp:
+		lp_sln = solve_mip(np.zeros(N_tot), Aiq, biq, Aeq, beq, set(range(N_u)))
+	else:
+		lp_sln = solve_lp(np.zeros(N_tot), Aiq, biq, Aeq, beq)
+	
+	if verbosity >= 1: print "It took ", time.time() - solve_start, " to solve (I)LP"
+
+	sol = _extract_solution(lp_sln['x'], N, T, cycle_set)
+
+	if verbosity:
+		_print_sol(G, problem_data['mode'], sol)
+
+	return sol
+
+def _insert_block(sparse_mat, block, position):
+	ncol = sparse_mat.shape[1]
+	nrow = block.shape[0]
+
+	if position > 0:
+		newblock = scipy.sparse.bmat([[ _coo_zeros(nrow, position), block ]])
+	else:
+		newblock = block
+
+	if ncol - position - block.shape[1] > 0:
+		newblock = scipy.sparse.bmat([[ newblock, _coo_zeros(nrow, ncol - position - block.shape[1]) ]])
+
+	return scipy.sparse.bmat([ [ sparse_mat ], 
+							   [ newblock   ] ])
 
 def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 0, verification = True):
 

@@ -18,37 +18,29 @@ G.add_path([1,2,3,6], mode=1)
 G.add_path([5,4,6] ,mode=1)
 G.add_path([6,7,8,8], mode=1)
 
-# Plot it
-# draw_modes(G)
-# plt.show()
+# Set up the mode-counting problem
+problem_data = {}
+
+# Graph
+problem_data['graph'] = G
 
 # Specify initial system distribution (sums to 30)
-init = [0, 1, 6, 4, 7, 10, 2, 0]
+problem_data['init'] = [0, 1, 6, 4, 7, 10, 2, 0] 
 
-T = 5 			# horizon
-mode_des = 15	# desired mode count over time
-mode = 1		# mode to count (1 or 2)
+problem_data['horizon'] = 5
+problem_data['cycle_set'] = [ cycle for cycle in nx.simple_cycles(G) ]  # all simple cycles (works because G is small)
 
-forbidden_nodes = G.nodes_with_selfloops()
+# We want to bound mode-1-count between 15 and 16
+problem_data['mode'] = 1
+problem_data['lb'] = 15
+problem_data['ub'] = 16
+
+# Optional arguments
+problem_data['lb_prefix'] = 15
+problem_data['ub_prefix'] = 16
+problem_data['order_function'] = G.nodes().index
+problem_data['forbidden_nodes'] = G.nodes_with_selfloops()
+problem_data['ilp'] = True
 
 # mode-counting synthesis
-mc_sol = synthesize(G, init, T, mode_des, mode, forbidden_nodes = forbidden_nodes, integer = False, verbosity = 1)
-
-nonint_cycles = mc_sol['cycles']
-nonint_assignments = mc_sol['assignments']
-int_assignments = make_integer(nonint_assignments)
-
-print mc_sol['controls']
-
-print cycles_maxmin(G,nonint_cycles, mode, nonint_assignments)
-print cycles_maxmin(G,nonint_cycles, mode, int_assignments)
-
-mc_sol2 = reach_cycles(G, init, T, mode, nonint_cycles, int_assignments, forbidden_nodes = forbidden_nodes, integer = False, 
-			verbosity = 1)
-
-print mc_sol2['controls']
-
-# # simulate it on the graph!
-# anim = simulate(G, mc_sol, lambda node : G.nodes().index(node))
-# anim.save("example_simple_anim.mp4", fps=10)
-# plt.show()
+solution_data = prefix_suffix_feasible(problem_data, verbosity = 1)

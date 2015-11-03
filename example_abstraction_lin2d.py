@@ -40,47 +40,48 @@ verify_bisim( kl2, tau, eta, 0.3 )
 ab.add_mode(vf1)
 ab.add_mode(vf2)
 
-# extract abstraction graph
-G = ab.graph
-
 # randomize an initial condition
-init = np.zeros(len(G))
+init = np.zeros(len(ab.graph))
 np.random.seed(1)
-for i in np.random.randint( len(G), size=50):
+for i in np.random.randint( len(ab.graph), size=50):
 	init[i] += 1
 
-# mode counting synthesis parameters
-T = 10 			# horizon
-mode_des = 28	# desired mode count over time
-mode = 1		# mode to count (1 or 2)
-forbidden_nodes = G.nodes_with_selfloops()
+# Define discrete mode-count synthesis problem
+pre_suf_data = {}
+pre_suf_data['graph'] = ab.graph			 # graph
+pre_suf_data['order_fcn'] = ab.node_to_idx   # function mapping node -> integer (improves speed if defined)
 
-# order fcn def
-order_fcn = ab.node_to_idx
+pre_suf_data['initial condition'] = init 					# initial state configuration
+pre_suf_data['forbidden nodes'] = ab.graph.nodes_with_selfloops() 	# nodes that can't be visited
 
-# mode-counting synthesis
-mc_sol = synthesize_feas(G, init, T, 26, 26, mode, 
-			forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
-			verbosity = 3)
+pre_suf_data['mode'] = 1 					# mode to control
+pre_suf_data['lb'] = 33 					# lower mode-count bound
+pre_suf_data['ub'] = 33 					# upper mode-count bound
 
-mc_sol = reach_cycles_feas(G, init, T, mode, 26, 26, mc_sol['cycles'], mc_sol['assignments'],
-			forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
-			verbosity = 3)
+pre_suf_data['ilp'] = True
 
+pre_suf_data['horizon'] = 10 			 	# prefix horizon
 
-# nonint_cycles = mc_sol['cycles']
-# nonint_assignments = mc_sol['assignments']
-# int_assignments = make_integer(nonint_assignments)
+pre_suf_data['cycle_set'] = [] 				# set of cycles in pre_suf_data['graph']
+gen = nx.simple_cycles(ab.graph)
+while True: 
+	try:
+		pre_suf_data['cycle_set'].append(next(gen))
+	except:
+		break
 
-# print cycles_maxmin(G,nonint_cycles, mode, nonint_assignments)
-# print cycles_maxmin(G,nonint_cycles, mode, int_assignments)
+# Solve discrete mode synthesis problem
+pre_suf_sol = prefix_suffix_feasible(pre_suf_data)
 
-# mc_sol2 = reach_cycles(G, init, T, mode, nonint_cycles, int_assignments, forbidden_nodes = forbidden_nodes, integer = True, order_fcn = order_fcn, 
-# 			verbosity = 1)
+pre_data = pre_suf_data.copy()
+pre_data['cycle_set'] = pre_suf_sol['cycles']
+pre_data['assignments'] = pre_suf_sol['assignments']
+
+pre_sol = prefix_feasible(pre_data)
 
 # simulate it on the connected subset of the graph!
 # strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
 # anim = simulate(G, mc_sol, order_fcn, strongly_conn_nodes)
 # anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
 
-# plt.show()
+plt.show()
