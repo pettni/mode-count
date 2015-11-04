@@ -9,9 +9,11 @@ import mosek
 from gurobipy import *
 
 TIME_LIMIT = 10 * 3600
+GUROBI_OUTPUT = 0
 
 solvers.options['show_progress'] = False
 solvers.options['mosek'] = {mosek.iparam.log: 0} 
+
 
 def _solve_mosek(c,Aiq,biq,Aeq,beq,J):
 	solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
@@ -41,7 +43,7 @@ def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
 	m = Model()
 
 	# Enable/disable output
-	m.setParam(GRB.Param.OutputFlag, 1)
+	m.setParam(GRB.Param.OutputFlag, GUROBI_OUTPUT)
 
 	# Some solver parameters, see
 	# http://www.gurobi.com/documentation/6.0/refman/mip_models.html

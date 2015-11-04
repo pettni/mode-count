@@ -1,15 +1,16 @@
 """
 Example illustrating abstracting a 2-mode switched system, and mode-counting synthesis on the abstraction graph
 """
+import sys
 
 import networkx as nx
 import matplotlib.pyplot as plt
 
 from numpy.linalg import norm
 from scipy.linalg import expm
+sys.path.append('../')
 
 from modecount import *
-from make_integer import make_integer
 
 # Define an abstraction
 data = {}
@@ -49,14 +50,14 @@ for i in np.random.randint( len(ab.graph), size=50):
 # Define discrete mode-count synthesis problem
 pre_suf_data = {}
 pre_suf_data['graph'] = ab.graph			 # graph
-pre_suf_data['order_fcn'] = ab.node_to_idx   # function mapping node -> integer (improves speed if defined)
+pre_suf_data['order_function'] = ab.node_to_idx   # function mapping node -> integer (improves speed if defined)
 
-pre_suf_data['initial condition'] = init 					# initial state configuration
-pre_suf_data['forbidden nodes'] = ab.graph.nodes_with_selfloops() 	# nodes that can't be visited
+pre_suf_data['init'] = init 					# initial state configuration
+pre_suf_data['forbidden_nodes'] = ab.graph.nodes_with_selfloops() 	# nodes that can't be visited
 
 pre_suf_data['mode'] = 1 					# mode to control
-pre_suf_data['lb'] = 33 					# lower mode-count bound
-pre_suf_data['ub'] = 33 					# upper mode-count bound
+pre_suf_data['lb_suffix'] = 33 					# lower mode-count bound
+pre_suf_data['ub_suffix'] = 33 					# upper mode-count bound
 
 pre_suf_data['ilp'] = True
 
@@ -72,12 +73,6 @@ while True:
 
 # Solve discrete mode synthesis problem
 pre_suf_sol = prefix_suffix_feasible(pre_suf_data)
-
-pre_data = pre_suf_data.copy()
-pre_data['cycle_set'] = pre_suf_sol['cycles']
-pre_data['assignments'] = pre_suf_sol['assignments']
-
-pre_sol = prefix_feasible(pre_data)
 
 # simulate it on the connected subset of the graph!
 # strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))

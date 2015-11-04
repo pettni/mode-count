@@ -38,7 +38,6 @@ import itertools
 import time
 
 from random_cycle import random_cycle
-from make_integer import make_integer, make_avg_integer
 from solve_gurobi import solve_mip, solve_lp
 
 np.set_printoptions(precision=4, suppress=True)
@@ -208,240 +207,53 @@ def lin_syst(G, order_fcn = None):
 
 	return A,B
 
-def _ux_constraints(G, init, T, order_fcn, forbidden_nodes = []):
-	# specify the following basic constraints for control and state
-	#
-	#  - initial
-	#  - no exit
-	#  - dynamics
-	#  - control bounds
-	#  - forbidden nodes
-
-	#  variable vector X = u[0], ..., u[T-1], x[0], ..., x[T]
-
-	# return Aeq, beq, Aiq, biq s.t.
-	# 	Aeq X = beq, Aiq X <= biq
-	# enforces these constraints
-
-	A,B = lin_syst(G, order_fcn)
-	maxmode = _maxmode(G)
-	N = A.shape[1]
-	assert(len(G) == N / maxmode)
-
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-
-	###############################
-	#### Dynamics constraints #####
-	###############################
-	N_eq_dyn = N * T 	  # dynamics
-	Aeq = _dyn_eq_mat(A,B,T)
-	beq = np.zeros( N_eq_dyn )
-
-	###############################
-	##### Initial constraints #####
-	###############################
-	Aeq = _insert_block( Aeq, _stacked_eye(G), N_u )
-	beq = np.hstack( [beq, init ] )
-
-	###############################
-	########### No exit ###########
-	###############################
-	Aeq = _insert_block(Aeq, np.ones([1,N]), N_u + N*T)
-	beq = np.hstack([beq, [np.sum(init)]])
-
-	###############################
-	#### No forbidden nodes #######
-	###############################
-	if len(forbidden_nodes) > 0:
-		N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
-		Aeq = _insert_block(Aeq, 
-			scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
-									 	(range(N_eq_forbidden) , 
-			 							[ t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
-										) 
-									 ),	
-			 						(N_eq_forbidden, N_x) ), 
-						    N_u )
-		beq = np.hstack([beq, np.zeros(N_eq_forbidden)])
-
-	###############################
-	#### Lower control bounds #####
-	###############################
-	Aiq = scipy.sparse.bmat([[-scipy.sparse.identity( N_u ), _coo_zeros(N_u, N_x)]])
-	biq = np.zeros(N_u)
-
-	###############################
-	#### Upper control bounds #####
-	###############################
-	Aiq = _insert_block(Aiq, 
-			scipy.sparse.bmat([[scipy.sparse.identity(N_u), 
-							   -scipy.sparse.identity(N_u)]]),
-			0)
-	biq = np.hstack([biq, np.zeros(N_u)])
-
-	return Aeq, beq, Aiq, biq
-
-def _prefix_mc(G, T, N, mode, lb, ub):
-	# Enforce mode-counts during prefix phase
-	# 
-	# Variable vector : x[0], ..., x[T]
-
-	N_ineq_mc_prefix = T+1
-	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), (1, N) )
-	prefix_mc_x_block = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-
-	return scipy.sparse.bmat([[-prefix_mc_x_block], [prefix_mc_x_block]]), \
-		   np.hstack([ -lb * np.ones(N_ineq_mc_prefix), ub * np.ones(N_ineq_mc_prefix) ])
-
-def _suffix_mc(G, cycle_set, mode):
-	# Enforce mode-counts during suffix phase
-	# 
-	# Variable vector : a[0], ..., a[C-1], lb[0], ..., lb[C-1], ub[0], ..., ub[C-1]
-
-	# number of inequalities for lb/ ub
-	N_ineq_cycle_bound = sum([len(cycle) for cycle in cycle_set])
-	N_bounds = len(cycle_set)
-
-	cycle_matrix = scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
-	bound_matrix = scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
-	zero_matrix = _coo_zeros( N_ineq_cycle_bound, N_bounds )
-
-	# lower cycle bounds: lb_i < cycle_matrix_i * ass_i
-	# upper cycle bounds: cycle_matrix_i * ass_i < ub_i
-
-	Aiq = scipy.sparse.bmat([[-cycle_matrix, bound_matrix, zero_matrix], 
-					         [cycle_matrix, zero_matrix, -bound_matrix]])
-	biq = np.zeros(2 * N_ineq_cycle_bound)
-
-	return Aiq, biq
-
-def _clean_cycle_set(cycle_set, forbidden_nodes):
-	new_cycle_set = []
-
-	# remove cycles that have forbidden nodes
-	forbidden_nodes_set = set(forbidden_nodes)
-	for cycle in cycle_set:
-		if len( forbidden_nodes_set.intersection(set(cycle))) == 0:
-			new_cycle_set.append(cycle) 
-
-	return new_cycle_set
-
-def _print_sol(G, mode, sol):
-
-	for cycle, ass in zip(sol['cycles'], sol['assignments']):
-		print ""
-		print "Cycle: ", cycle
-		print "Cycle mode-count: ", next(_cycle_rows(G,cycle, mode))
-		print "Assignment: ", np.array(ass)
-		print "Sum: ", sum(ass)
-		print "Bounds: ", np.array(cycle_maxmin(G, cycle, mode, ass))
-
-	print ""
-	print "Prefix interval: ", np.array(states_maxmin(G, sol['states'], mode))
-	print "Suffix interval: ", np.array(cycles_maxmin(G, sol['cycles'], mode, sol['assignments']))
-	print ""
-
-def _verify_prefix(G, T, order_fcn, states, controls):
-	A,B = lin_syst(G, order_fcn)
-	for t in range(1,T+1):
-		assert (np.all(np.abs(A.dot(states[:,t-1]) + B.dot(controls[:,t-1]) - states[:,t]) < 1e-10))
-
-def _extract_solution_state(sol_vector, N, T):
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-
-	sol = {}
-	sol['controls'] = np.array(sol_vector[:N_u]).reshape(T,N).transpose()
-	sol['states'] = np.array(sol_vector[N_u:N_u+N_x]).reshape(T+1,N).transpose()
-	return sol
-
-def _extract_solution(sol_vector, N, T, cycle_set):
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-
-	sol = _extract_solution_state(sol_vector, N, T)
-	sol['cycles'] = []
-	sol['assignments'] = []
-
-	index_ai =  lambda i : N_u + N_x + sum([len(cycle_set[ii]) for ii in range(i) ])  	# starting index for a[i], i = 0, ..., C-1
-	for i in range(len(cycle_set)):
-		alpha_i = list(sol_vector[index_ai(i): index_ai(i) + len(cycle_set[i])])
-		if sum( alpha_i ) > 1e-5:
-			sol['cycles'].append(cycle_set[i])
-			sol['assignments'].append(alpha_i)
-	return sol
-
-def _extract_arguments(problem_data):
-	G = problem_data['graph']
-	T = problem_data['horizon']
-	N = len(G) * _maxmode(G)
-
-	# Integer program?
-	try: ilp = problem_data['ilp']
-	except: ilp = True
-
-	try: order_fcn = problem_data['order_function']
-	except: print "no order function provided, may be slow"; order_fcn = G.nodes().index
-
-	try: forbidden_nodes = problem_data['forbidden_nodes'] 
-	except: print "no forbidden nodes given"; forbidden_nodes = []
-
-	return G, T, N, ilp, order_fcn, forbidden_nodes
-
 def prefix_feasible(problem_data, verbosity = 1):
 	'''
-Define and solve the prefix part of a mode-counting 
-synthesis problem (requires a given suffix part)
- 
-Inputs:
+    Define and solve the prefix part of a mode-counting 
+    synthesis problem (requires a given suffix part)
+     
+    Inputs:
+        
+        problem_data: dictionary with the following fields:
+        'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
+                             class: networkx.DiGraph
+        'init'            : initial configuration in G
+                             type: list of length len(G)    
+        'horizon'         : integer representing length of strategy prefix part
+                             type: int
+        'cycle_set'       : a list of cycles in G
+                             type: list of lists
+        'assignments'     : assignments to 'cycle_set'
+                             type: list of lists
+        'mode'            : mode to count
+                             type: int
+        'lb_prefix'       : lower mode-counting bound in prefix phase
+                             type: int
+        'ub_prefix'       : upper mode-counting bound in prefix phase
+                             type: int
+        'order function'  : a function that is a bijection that maps nodes in G to integers [0, 1, ..., N]  (optional)
+                            If (an efficient) function is defined, it will improve performance. 
+                             class: lambda
+                             Defaults to G.nodes().index
+        'forbidden nodes' : nodes in G that can not be visited (optional)
+                             type: list
+                             Default: []
+        'ilp'             : if true, solve as ILP (optional)
+                             class: bool
+                             Default: true    
     
-    problem_data: dictionary with the following fields:
-    'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
-                         class: networkx.DiGraph
-    'init'            : initial configuration in G
-                         type: list of length len(G)    
-    'horizon'         : integer representing length of strategy prefix part
-                         type: int
-    'cycle_set'       : a list of cycles in G
-                         type: list of lists
-    'assignments'     : assignments to 'cycle_set'
-                         type: list of lists
-    'mode'            : mode to count
-                         type: int
-    'lb'              : lower mode-counting bound
-                         type: int
-    'ub'              : upper mode-counting bound
-                         type: int
-    'lb_prefix'       : lower mode-counting bound in prefix phase (optional)
-                         type: int
-                         Default: same as 'lb'
-    'ub_prefix'       : upper mode-counting bound in prefix phase (optional)
-                         type: int
-                         Default: same as 'ub'
-    'order function'  : a function that is a bijection that maps nodes in G to integers [0, 1, ..., N]  (optional)
-                        If (an efficient) function is defined, it will improve performance. 
-                         class: lambda
-                         Defaults to G.nodes().index
-    'forbidden nodes' : nodes in G that can not be visited (optional)
-                         type: list
-                         Default: []
-    'ilp'             : if true, solve as ILP (optional)
-                         class: bool
-                         Default: true
-
-   verbosity: level of verbosity
-    
-Output:    
-  solution_data: a dictionary with the following fields:
-    'controls'        : prefix part u of strategy, u[:,t] is control at time t
-                         type: np.array
-    'states'          : states x generated by u, x[:,t] is state at time t
-                         type: np.array
-    'cycles'          : suffix cycles
-                         type: list
-    'assignments'     : suffix assignments
-                         type list
+       verbosity: level of verbosity
+        
+    Output:    
+      solution_data: a dictionary with the following fields:
+        'controls'        : prefix part u of strategy, u[:,t] is control at time t
+                             type: np.array
+        'states'          : states x generated by u, x[:,t] is state at time t
+                             type: np.array
+        'cycles'          : suffix cycles
+                             type: list
+        'assignments'     : suffix assignments
+                             type list
 	'''
 
 	G, T, N, ilp, order_fcn, forbidden_nodes = _extract_arguments(problem_data)
@@ -463,14 +275,14 @@ Output:
 	##### Time T constraints ######
 	###############################
 	Psi_mats = [_cycle_indices(G, cycle, order_fcn) for cycle in problem_data['cycle_set']]
-	Aeq = _insert_block( Aeq, _stacked_eye(G), N_u + N*T )
+	Aeq = _sparse_vstack( Aeq, _stacked_eye(G), N_u + N*T )
 	beq = np.hstack([beq, np.sum( [ _cycle_indices(G, cycle, order_fcn).dot(ass) for cycle, ass in zip( problem_data['cycle_set'], problem_data['assignments'] ) ], 0)])
 
 	###############################
 	##### Prefix mode-count #######
 	###############################
-	Aiq_new, biq_new = _prefix_mc(G, T, N, problem_data['mode'], problem_data['lb'], problem_data['ub'])
-	Aiq = _insert_block(Aiq, Aiq_new, N_u )
+	Aiq_new, biq_new = _prefix_mc(G, T, N, problem_data['mode'], problem_data['lb_prefix'], problem_data['ub_prefix'])
+	Aiq = _sparse_vstack(Aiq, Aiq_new, N_u )
 	biq = np.hstack([biq, biq_new])
 	
 	if verbosity >= 1: print "It took ", time.time() - lp_start, " to set up (I)LP"
@@ -490,68 +302,65 @@ Output:
 	sol['assignments'] = problem_data['assignments']
 	sol['cycles'] = problem_data['cycle_set']
 
-	if verbosity:
+	if verbosity >= 2:
 		_print_sol(G, problem_data['mode'], sol)
-
-	if verification:
-		_verify_prefix(G, T, order_fcn, sol['states'], sol['controls'])
 
 	return sol
 
 def prefix_suffix_feasible(problem_data, verbosity = 1):
 	'''
-Define and solve a mode-counting synthesis problem
-with a prefix-suffix strategy.
- 
-Inputs:
-    
-  problem_data: dictionary with the following fields:
-    'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
-                         class: networkx.DiGraph
-    'init'            : initial configuration in G
-                         type: list of length len(G)    
-    'horizon'         : integer representing length of strategy prefix part
-                         type: int
-    'cycle_set'       : a list of cycles in G
-                         type: list of lists
-    'mode'            : mode to count
-                         type: int
-    'lb'              : lower mode-counting bound
-                         type: int
-    'ub'              : upper mode-counting bound
-                         type: int
-    'lb_prefix'       : lower mode-counting bound in prefix phase (optional)
-                         type: int
-                         Default: same as 'lb'
-    'ub_prefix'       : upper mode-counting bound in prefix phase (optional)
-                         type: int
-                         Default: same as 'ub'
-    'order function'  : a function that is a bijection that maps nodes in G to integers [0, 1, ..., N]  (optional)
-                        If (an efficient) function is defined, it will improve performance. 
-                         class: lambda
-                         Defaults to G.nodes().index
-    'forbidden nodes' : nodes in G that can not be visited (optional)
-                         type: list
-                         Default: []
-    'ilp'             : if true, solve as ILP (optional)
-                         class: bool
-                         Default: true
+    Define and solve a mode-counting synthesis problem
+    with a prefix-suffix strategy.
+     
+    Inputs:
+        
+      problem_data: dictionary with the following fields:
+        'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
+                             class: networkx.DiGraph
+        'init'            : initial configuration in G
+                             type: list of length len(G)    
+        'horizon'         : integer representing length of strategy prefix part
+                             type: int
+        'cycle_set'       : a list of cycles in G
+                             type: list of lists
+        'mode'            : mode to count
+                             type: int
+        'lb_suffix'       : lower mode-counting bound
+                             type: int
+        'ub_suffix'       : upper mode-counting bound
+                             type: int
+        'lb_prefix'       : lower mode-counting bound in prefix phase (optional)
+                             type: int
+                             Default: same as 'lb_suffix'
+        'ub_prefix'       : upper mode-counting bound in prefix phase (optional)
+                             type: int
+                             Default: same as 'ub_suffix'
+        'order_function'  : a function that is a bijection that maps nodes in G to integers [0, 1, ..., N]  (optional)
+                            If (an efficient) function is defined, it will improve performance. 
+                             class: lambda
+                             Defaults to G.nodes().index
+        'forbidden_nodes' : nodes in G that can not be visited (optional)
+                             type: list
+                             Default: []
+        'ilp'             : if true, solve as ILP (optional)
+                             class: bool
+                             Default: true    
 
-  verbosity: level of verbosity
-    
-Output:    
-  solution_data: a dictionary with the following fields:
-    'controls'        : prefix part u of strategy, u[:,t] is control at time t
-                         type: np.array
-    'states'          : states x generated by u, x[:,t] is state at time t
-                         type: np.array
-    'cycles'          : suffix cycles
-                         type: list
-    'assignments'     : suffix assignments
-                         type list
- 
-Example: see example_simple.py
-'''
+      verbosity: level of verbosity
+        
+    Output:    
+      solution_data: a dictionary with the following fields:
+        'controls'        : prefix part u of strategy, u[:,t] is control at time t
+                             type: np.array
+        'states'          : states x generated by u, x[:,t] is state at time t
+                             type: np.array
+        'cycles'          : suffix cycles
+                             type: list
+        'assignments'     : suffix assignments
+                             type list
+     
+    Example: see example_simple.py
+    '''
 
 	G, T, N, ilp, order_fcn, forbidden_nodes = _extract_arguments(problem_data)
 
@@ -581,21 +390,21 @@ Example: see example_simple.py
 	##### Time T constraints ######
 	###############################
 	Psi_mats = [_cycle_indices(G, cycle, order_fcn) for cycle in cycle_set]
-	Aeq = _insert_block( Aeq, scipy.sparse.bmat([[_stacked_eye(G), -scipy.sparse.bmat([ Psi_mats ])]]), N_u + N*T )
+	Aeq = _sparse_vstack( Aeq, scipy.sparse.bmat([[_stacked_eye(G), -scipy.sparse.bmat([ Psi_mats ])]]), N_u + N*T )
 	beq = np.hstack([beq, np.zeros(len(G))])
 
 	###############################
 	##### Prefix mode-count #######
 	###############################
 	try:
-		lb_prefix = problem_data['lb prefix']
-		ub_prefix = problem_data['ub prefix']
+		lb_prefix = problem_data['lb_prefix']
+		ub_prefix = problem_data['ub_prefix']
 	except:
-		lb_prefix = problem_data['lb']
-		ub_prefix = problem_data['ub']
+		lb_prefix = problem_data['lb_suffix']
+		ub_prefix = problem_data['ub_suffix']
 
 	Aiq_new, biq_new = _prefix_mc(G, T, N, problem_data['mode'], lb_prefix, ub_prefix)
-	Aiq = _insert_block(Aiq, Aiq_new, N_u )
+	Aiq = _sparse_vstack(Aiq, Aiq_new, N_u )
 	biq = np.hstack([biq, biq_new])
 
 	###############################
@@ -604,18 +413,18 @@ Example: see example_simple.py
 
 	# Individual cycles bounds
 	Aiq_new, biq_new = _suffix_mc(G, cycle_set, problem_data['mode'])
-	Aiq = _insert_block(Aiq, Aiq_new, N_u + N_x)
+	Aiq = _sparse_vstack(Aiq, Aiq_new, N_u + N_x)
 	biq = np.hstack([biq, biq_new])
 
 	# Aggregate cycle bounds: sum(ub) < ub_tot, lb_tot < sum(lb)
 	Aiq_new = scipy.sparse.block_diag( (-np.ones([1, N_bound]), np.ones([1, N_bound])) )
-	Aiq = _insert_block(Aiq, Aiq_new, N_u + N_x + N_cycle_tot)
-	biq = np.hstack([biq, np.array([ -problem_data['lb'], problem_data['ub'] ]) ])
+	Aiq = _sparse_vstack(Aiq, Aiq_new, N_u + N_x + N_cycle_tot)
+	biq = np.hstack([biq, np.array([ -problem_data['lb_suffix'], problem_data['ub_suffix'] ]) ])
 
 	###############################
 	#### Positive assignments #####
 	###############################
-	Aiq = _insert_block(Aiq, -scipy.sparse.identity( N_cycle_tot  ), N_u + N_x)
+	Aiq = _sparse_vstack(Aiq, -scipy.sparse.identity( N_cycle_tot  ), N_u + N_x)
 	biq = np.hstack([biq, np.zeros(N_cycle_tot )])
 
 	if verbosity >= 1: time.time(); print "It took ", time.time() - lp_start, " to set up (I)LP"
@@ -635,1007 +444,8 @@ Example: see example_simple.py
 
 	sol = _extract_solution(lp_sln['x'], N, T, cycle_set)
 
-	if verbosity:
+	if verbosity >= 2:
 		_print_sol(G, problem_data['mode'], sol)
-
-	return sol
-
-def _insert_block(sparse_mat, block, position):
-	ncol = sparse_mat.shape[1]
-	nrow = block.shape[0]
-
-	if position > 0:
-		newblock = scipy.sparse.bmat([[ _coo_zeros(nrow, position), block ]])
-	else:
-		newblock = block
-
-	if ncol - position - block.shape[1] > 0:
-		newblock = scipy.sparse.bmat([[ newblock, _coo_zeros(nrow, ncol - position - block.shape[1]) ]])
-
-	return scipy.sparse.bmat([ [ sparse_mat ], 
-							   [ newblock   ] ])
-
-def reach_cycles(G, init, T, mode, cycle_set, assignments, forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 0, verification = True):
-
-	if verbosity >= 3:
-		solvers.options['show_progress'] = True
-		solvers.options['mosek'] = {mosek.iparam.log: 1} 
-	else:
-		solvers.options['show_progress'] = False
-		solvers.options['mosek'] = {mosek.iparam.log: 0} 
-
-	if order_fcn == None:
-		nodelist = G.nodes()
-		order_fcn = lambda v : nodelist.index(v)
-
-	A,B = lin_syst(G, order_fcn)
-	maxmode = _maxmode(G)
-	N = A.shape[1]
-
-	[Kl, Ku] = cycles_maxmin(G, cycle_set, mode, assignments)
-
-	assert(len(G) == N / maxmode)
-
-	### SET UP LP ###
-
-	start = time.time()
-
-	# optimization vector is 
-	# 
-	#  [ u[0], ..., u[T-1], x[0], ..., x[T], Kl, Ku, err ]
-	#
-
-	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
-
-	# variable block dimensions
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-	N_lb 	= len(cycle_set)	# lb vars
-	N_ub 	= len(cycle_set)	# ub vars
-	N_lb_tot = 1
-	N_ub_tot = 1
-	N_err = 1
-
-	N_tot = N_u + N_x + N_lb_tot + N_ub_tot + N_err
-
-	# number of equalities
-	N_eq_dyn = N * T 	  # dynamics
-	N_eq_0 = len(G)  # initial state agreement
-	N_eq_T = len(G)  # time T constraint
-	N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
-
-	# number of inequalities
-	N_ineq_mc_trans = T+1 	 					# transient mode constraint
-	N_ineq_control = N_u 						# upper/lower ctrl bounds
-	N_ineq_err = 2
-
-	# Compute cycle -> vertex matrices for all cycles
-	Psi_mats = []    # matrices cycle -> state
-	for cycle in cycle_set:
-		Psi = _cycle_indices(G, cycle, order_fcn)
-		if verification:
-			assert(Psi.shape[0] == len(G))
-			assert(Psi.shape[1] == len(cycle))
-		Psi_mats.append( Psi )
-
-
-	# Build equality constraints Aeq x = beq
-
-	if verbosity >= 1: print "setting up equality constraints"
-
-	# dynamics constraints
-	Aeq11 = _dyn_eq_mat(A,B,T)
-	Aeq12 = scipy.sparse.coo_matrix( (N_eq_dyn, N_lb_tot + N_ub_tot + N_err) )
-	beq1 = np.zeros( N_eq_dyn )
-
-	if verification: _verify_dims([Aeq11, Aeq12], beq1, N_tot)
-	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
-
-	# initial constraints
-	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
-	Aeq22 = _stacked_eye(G)
-	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T + N_lb_tot + N_ub_tot + N_err) )				# zeros
-	beq2 = np.array(init)
-
-	if verification: _verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
-	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
-
-	# final constraints
-	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
-	Aeq32 = _stacked_eye(G)
-	Aeq33 = _coo_zeros( N_eq_T, N_ub_tot + N_lb_tot + N_err )
-	beq3 = np.sum( [ _cycle_indices(G, cycle, order_fcn).dot(ass) for cycle, ass in zip( cycle_set, assignments ) ], 0)
-
-	if verification: _verify_dims([Aeq31, Aeq32, Aeq33], beq3, N_tot)
-	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33]]) 
-
-	# no nodes exited state space constraint
-	Aeq41 = _coo_zeros( 1, N_u + N*T )
-	Aeq42 = np.ones([1, N])
-	Aeq43 = _coo_zeros( 1, N_ub_tot + N_lb_tot + N_err )
-	beq4 = np.array([ np.sum(init) ])
-	
-	if verification: _verify_dims([Aeq41, Aeq42, Aeq43], beq4, N_tot)
-	Aeq4 = scipy.sparse.bmat([[ Aeq41, Aeq42, Aeq43]]) 
-
-	# forbidden node constraints
-	Aeq5 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
-		( range(N_eq_forbidden) , 
-		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
-		) ),
-		 (N_eq_forbidden, N_tot) )
-	beq5 = np.zeros(N_eq_forbidden)
-
-	if verification: _verify_dims([Aeq5], beq5, N_tot)
-	
-	if N_eq_forbidden:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4], [Aeq5]])
-		beq = np.hstack([beq1, beq2, beq3, beq4, beq5])
-	else:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
-		beq = np.hstack([beq1, beq2, beq3, beq4])
-
-
-	# Build inequality constraints Aiq x <= biq
-	if verbosity >= 1: print "setting up inequality constraints"
-
-	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
-									(1, N) )
-
-	# lower bound mode counting
-	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
-	Aiq12 = scipy.sparse.block_diag( (-sum_mode_mat,) * (T+1) )
-	Aiq13 = scipy.sparse.coo_matrix( (np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
-	Aiq14 = _coo_zeros( N_ineq_mc_trans, N_ub_tot + N_err)
-	biq1 = np.zeros(N_ineq_mc_trans)
-
-	_verify_dims([Aiq11, Aiq12, Aiq13, Aiq14], biq1, N_tot)
-
-	# upper bound mode counting
-	Aiq21 = Aiq11
-	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_lb_tot)
-	Aiq24 = scipy.sparse.coo_matrix( (-np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
-	Aiq25 = _coo_zeros( N_ineq_mc_trans, N_err)
-	biq2 = np.zeros(N_ineq_mc_trans)
-
-	_verify_dims([Aiq21, Aiq22, Aiq23, Aiq24, Aiq25], biq2, N_tot)
-
-	# lower control bounds
-	Aiq31 = -scipy.sparse.identity( N_u )
-	Aiq32 = _coo_zeros( N_ineq_control, N_tot - N_u )
-	biq3 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq31, Aiq32], biq3, N_tot)
-
-	# upper control bounds
-	Aiq41 = scipy.sparse.identity(N_ineq_control)
-	Aiq42 = -scipy.sparse.identity(N_ineq_control)
-	Aiq43 = _coo_zeros(N_ineq_control, N + N_lb_tot + N_ub_tot + N_err)
-	biq4 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq41, Aiq42, Aiq43], biq4, N_tot)
-
-	# set err > Kl - lb,  err > ub - Ku
-	Aiq51 = _coo_zeros(2, N_u + N_x)
-	Aiq52 = np.array([[ -1, 0, -1 ], [0, 1, -1]])
-	biq5  = np.array([ -Kl, Ku ])
-
-	_verify_dims([Aiq51, Aiq52], biq5, N_tot)
-
-	Aiq1 = scipy.sparse.bmat([ [ Aiq11, Aiq12, Aiq13, Aiq14 ]] )
-	Aiq2 = scipy.sparse.bmat([ [ Aiq21, Aiq22, Aiq23, Aiq24, Aiq25 ]] )
-	Aiq3 = scipy.sparse.bmat([ [ Aiq31, Aiq32 ]] )
-	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
-	Aiq5 = scipy.sparse.bmat([ [ Aiq51, Aiq52 ]] )
-
-	Aiq = scipy.sparse.bmat([ [Aiq1],
-							  [Aiq2],
-							  [Aiq3], 
-							  [Aiq4], 
-							  [Aiq5] ])
-	biq = np.hstack([biq1, biq2, biq3, biq4, biq5])
-
-	# cost function
-	c = np.zeros(N_tot)
-	c[-1] = 1
-
-	end = time.time()
-	if verbosity >= 1: print "It took ", end - start, " to set up LP"
-	start = time.time()
-
-	if integer:
-		if verbosity >= 1: print "solving ILP..."
-		lp_sln = solve_mip(c, Aiq, biq, Aeq, beq, set(range(N_u)))
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
-	else:
-		if verbosity >= 1: print "solving LP..."
-		lp_sln = solve_lp(c, Aiq, biq, Aeq, beq)
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve LP"
-
-	err_out = x_out[-1]
-
-	if verbosity >= 1:
-		print ""
-		print "Bound: ", err_out
-		print "Reach guaranteed: [", Kl-err_out, ", ", Ku+err_out, "]"
-		print "Steady state guaranteed: ", cycles_maxmin(G, cycle_set, mode, assignments)
-		print ""
-
-	sol = {}
-	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
-	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
-	sol['assignments'] = assignments
-	sol['cycles'] = cycle_set
-	sol['forbidden_nodes'] = forbidden_nodes
-
-	if verification:
-		for t in range(1,T+1):
-			# check that sol obeys dynamics up to time T
-			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-5))
-
-	return sol
-
-def reach_cycles_feas(G, init, T, mode, cycle_set, assignments, Kl_trans, Ku_trans, forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 0, verification = True):
-
-	if order_fcn == None:
-		nodelist = G.nodes()
-		order_fcn = lambda v : nodelist.index(v)
-
-	A,B = lin_syst(G, order_fcn)
-	maxmode = _maxmode(G)
-	N = A.shape[1]
-
-	[Kl, Ku] = cycles_maxmin(G, cycle_set, mode, assignments)
-
-	assert(len(G) == N / maxmode)
-
-	### SET UP LP ###
-
-	start = time.time()
-
-	# optimization vector is 
-	# 
-	#  [ u[0], ..., u[T-1], x[0], ..., x[T], Kl, Ku, err ]
-	#
-
-	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
-
-	# variable block dimensions
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-
-	N_tot = N_u + N_x
-
-	# number of equalities
-	N_eq_dyn = N * T 	  # dynamics
-	N_eq_0 = len(G)  # initial state agreement
-	N_eq_T = len(G)  # time T constraint
-	N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
-
-	# number of inequalities
-	N_ineq_mc_trans = T+1 	 					# transient mode constraint
-	N_ineq_control = N_u 						# upper/lower ctrl bounds
-	N_ineq_tot_lb = 1
-	N_ineq_tot_ub = 1
-
-	# Compute cycle -> vertex matrices for all cycles
-	Psi_mats = []    # matrices cycle -> state
-	for cycle in cycle_set:
-		Psi = _cycle_indices(G, cycle, order_fcn)
-		if verification:
-			assert(Psi.shape[0] == len(G))
-			assert(Psi.shape[1] == len(cycle))
-		Psi_mats.append( Psi )
-
-
-	# Build equality constraints Aeq x = beq
-
-	if verbosity >= 1: print "setting up equality constraints"
-
-	# dynamics constraints
-	Aeq1 = _dyn_eq_mat(A,B,T)
-	beq1 = np.zeros( N_eq_dyn )
-
-	if verification: _verify_dims([Aeq1], beq1, N_tot)
-
-	# initial constraints
-	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
-	Aeq22 = _stacked_eye(G)
-	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T) )				# zeros
-	beq2 = np.array(init)
-
-	if verification: _verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
-	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
-
-	# final constraints
-	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
-	Aeq32 = _stacked_eye(G)
-	beq3 = np.sum( [ _cycle_indices(G, cycle, order_fcn).dot(ass) for cycle, ass in zip( cycle_set, assignments ) ], 0)
-
-	if verification: _verify_dims([Aeq31, Aeq32], beq3, N_tot)
-	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32]]) 
-
-	# no nodes exited state space constraint
-	Aeq41 = _coo_zeros( 1, N_u + N*T )
-	Aeq42 = np.ones([1, N])
-	beq4 = np.array([ np.sum(init) ])
-	
-	if verification: _verify_dims([Aeq41, Aeq42], beq4, N_tot)
-	Aeq4 = scipy.sparse.bmat([[ Aeq41, Aeq42]]) 
-
-	# forbidden node constraints
-	Aeq5 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
-		( range(N_eq_forbidden) , 
-		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
-		) ),
-		 (N_eq_forbidden, N_tot) )
-	beq5 = np.zeros(N_eq_forbidden)
-
-	if verification: _verify_dims([Aeq5], beq5, N_tot)
-	
-	if N_eq_forbidden:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4], [Aeq5]])
-		beq = np.hstack([beq1, beq2, beq3, beq4, beq5])
-	else:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
-		beq = np.hstack([beq1, beq2, beq3, beq4])
-
-
-	# Build inequality constraints Aiq x <= biq
-	if verbosity >= 1: print "setting up inequality constraints"
-
-	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), (1, N) )
-
-	# lower bound mode counting
-	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
-	Aiq12 = -scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-	biq1 = -Kl_trans * np.ones(N_ineq_mc_trans)
-
-	_verify_dims([Aiq11, Aiq12], biq1, N_tot)
-
-	# upper bound mode counting
-	Aiq21 = Aiq11
-	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-	biq2 = Ku_trans * np.ones(N_ineq_mc_trans)
-
-	_verify_dims([Aiq21, Aiq22], biq2, N_tot)
-
-	# lower control bounds
-	Aiq31 = -scipy.sparse.identity( N_u )
-	Aiq32 = _coo_zeros( N_ineq_control, N_tot - N_u )
-	biq3 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq31, Aiq32], biq3, N_tot)
-
-	# upper control bounds
-	Aiq41 = scipy.sparse.identity(N_ineq_control)
-	Aiq42 = -scipy.sparse.identity(N_ineq_control)
-	Aiq43 = _coo_zeros(N_ineq_control, N)
-	biq4 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq41, Aiq42, Aiq43], biq4, N_tot)
-
-
-	Aiq1 = scipy.sparse.bmat([ [ Aiq11, Aiq12 ]] )
-	Aiq2 = scipy.sparse.bmat([ [ Aiq21, Aiq22 ]] )
-	Aiq3 = scipy.sparse.bmat([ [ Aiq31, Aiq32 ]] )
-	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
-
-	Aiq = scipy.sparse.bmat([ [Aiq1], [Aiq2], [Aiq3], [Aiq4] ])
-	biq = np.hstack([biq1, biq2, biq3, biq4 ])
-
-	# no cost function
-	c = np.zeros(N_tot)
-
-	end = time.time()
-	if verbosity >= 1: print "It took ", end - start, " to set up (I)LP"
-	start = time.time()
-
-	if integer:
-		if verbosity >= 1: print "solving ILP..."
-		lp_sln = solve_mip(c, Aiq, biq, Aeq, beq, set(range(N_u)))
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
-	else:
-		if verbosity >= 1: print "solving LP..."
-		lp_sln = solve_lp(c, Aiq, biq, Aeq, beq)
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve LP"
-
-	x_out = lp_sln['x']
-
-	sol = {}
-	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
-	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
-	sol['assignments'] = assignments
-	sol['cycles'] = cycle_set
-	sol['forbidden_nodes'] = forbidden_nodes
-
-	if verbosity >= 1:
-		print ""
-		print "Guaranteed trans interval: [", Kl_trans, ", ", Ku_trans, "]"
-		print "Actual transient interval: ", states_maxmin(G, sol['states'], mode)
-		print "Guaranteed ss interval: [", Kl, ", ", Ku, "]"
-		print "Actual ss guaranteed: ", cycles_maxmin(G,sol['cycles'], mode, sol['assignments'])
-		print ""
-
-	if verification:
-		for t in range(1,T+1):
-			# check that sol obeys dynamics up to time T
-			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-5))
-
-	return sol
-
-def synthesize_feas(G, init, T, Kl, Ku, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 1, verification = False, Kl_trans = None, Ku_trans = None):
-
-	if Kl_trans == None:
-		Kl_trans = Kl
-
-	if Ku_trans == None:
-		Ku_trans = Ku
-
-	if order_fcn == None:
-		nodelist = G.nodes()
-		order_fcn = lambda v : nodelist.index(v)
-
-	A,B = lin_syst(G, order_fcn)
-	maxmode = _maxmode(G)
-	N = A.shape[1]
-
-	assert(len(G) == N / maxmode)
-
-	# fill out cycle set
-	if len(cycle_set) == 0:
-		if verbosity >= 1: print "no cycles given, enumerating..."
-		# enumerate all simple cycles
-		for c in nx.simple_cycles(G):
-			if not set(forbidden_nodes) & set(c):
-				# only care about cycles not involving roots
-				cycle_set.append(c)
-		if verbosity >= 1: print "finished enumerating"
-	### SET UP LP ###
-	start = time.time()
-
-	# optimization vector is 
-	# 
-	#  [ u[0], ..., u[T-1], x[0], ..., x[T], a[0], ..., a[C-1], Kl[1], ..., Kl[C], Ku[1], ..., Ku[C], Kl, Ku, err ]
-	#
-
-	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
-
-	# variable block dimensions
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-	N_cycle_tot = sum(N_cycle)	# cycle vars
-	N_lb 	= len(cycle_set)	# lb vars
-	N_ub 	= len(cycle_set)	# ub vars
-	N_err = 1
-
-	N_tot = N_u + N_x + N_cycle_tot + N_lb + N_ub + N_err
-
-	# number of equalities
-	N_eq_dyn = N * T 	  # dynamics
-	N_eq_0 = len(G)  # initial state agreement
-	N_eq_T = len(G)  # time T constraint
-	N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
-
-	# number of inequalities
-	N_ineq_mc_trans = T+1 	 					# transient mode constraint
-	N_ineq_control = N_u 						# upper/lower ctrl bounds
-	N_ineq_cycle_lb = N_cycle_tot				# upper bounds on cycle
-	N_ineq_cycle_ub = N_cycle_tot				# upper bounds on cycle
-	N_ineq_cycle_pos = N_cycle_tot
-	N_ineq_tot_lb = 1
-	N_ineq_tot_ub = 1
-	N_ineq_err = 2
-
-	# Compute cycle -> vertex matrices for all cycles
-	Psi_mats = []    # matrices cycle -> state
-	for cycle in cycle_set:
-		Psi = _cycle_indices(G, cycle, order_fcn)
-		if verification:
-			assert(Psi.shape[0] == len(G))
-			assert(Psi.shape[1] == len(cycle))
-		Psi_mats.append( Psi )
-
-
-	# Build equality constraints Aeq x = beq
-
-	if verbosity >= 1: print "setting up equality constraints"
-
-	# dynamics constraints
-	Aeq11 = _dyn_eq_mat(A,B,T)
-	Aeq12 = scipy.sparse.coo_matrix( (N_eq_dyn, N_cycle_tot + N_lb + N_ub  + N_err) )
-	beq1 = np.zeros( N_eq_dyn )
-
-	if verification: _verify_dims([Aeq11, Aeq12], beq1, N_tot)
-	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
-
-	# initial constraints
-	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
-	Aeq22 = _stacked_eye(G)
-	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T + N_cycle_tot + N_lb + N_ub + N_err) )				# zeros
-	beq2 = np.array(init)
-
-	if verification: _verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
-	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
-
-	# final constraints
-	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
-	Aeq32 = _stacked_eye(G)
-	Aeq33 = -scipy.sparse.bmat([ Psi_mats ])
-	Aeq34 = _coo_zeros( N_eq_T, N_lb + N_ub  + N_err )
-	beq3 = np.zeros(N_eq_T)
-
-	if verification: _verify_dims([Aeq31, Aeq32, Aeq33, Aeq34], beq3, N_tot)
-	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33, Aeq34]]) 
-
-	# no nodes exited state space constraint
-	Aeq41 = _coo_zeros( 1, N_u + N*T )
-	Aeq42 = np.ones([1, N])
-	Aeq43 = _coo_zeros( 1, N_cycle_tot + N_lb + N_ub + N_err )
-	beq4 = np.array([ np.sum(init) ])
-	
-	if verification: _verify_dims([Aeq41, Aeq42, Aeq43], beq4, N_tot)
-	Aeq4 = scipy.sparse.bmat([[ Aeq41, Aeq42, Aeq43]]) 
-
-	# forbidden node constraints
-	Aeq5 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
-		( range(N_eq_forbidden) , 
-		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
-		) ),
-		 (N_eq_forbidden, N_tot) )
-	beq5 = np.zeros(N_eq_forbidden)
-
-	if verification: _verify_dims([Aeq5], beq5, N_tot)
-	
-	if N_eq_forbidden:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4], [Aeq5]])
-		beq = np.hstack([beq1, beq2, beq3, beq4, beq5])
-	else:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
-		beq = np.hstack([beq1, beq2, beq3, beq4])
-
-
-	# Build inequality constraints Aiq x <= biq
-	if verbosity >= 1: print "setting up inequality constraints"
-
-	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
-									(1, N) )
-
-	# lower bound mode counting
-	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
-	Aiq12 = -scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-	Aiq13 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub)
-	Aiq14 = _coo_zeros( N_ineq_mc_trans, N_err)
-	biq1 = -Kl_trans * np.ones(N_ineq_mc_trans)
-
-	_verify_dims([Aiq11, Aiq12, Aiq13, Aiq14], biq1, N_tot)
-
-	# upper bound mode counting
-	Aiq21 = Aiq11
-	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub)
-	Aiq24 = _coo_zeros( N_ineq_mc_trans, N_err)
-	biq2 = Ku_trans * np.ones(N_ineq_mc_trans)
-
-	_verify_dims([Aiq21, Aiq22, Aiq23, Aiq24], biq2, N_tot)
-
-	# lower control bounds
-	Aiq31 = -scipy.sparse.identity( N_u )
-	Aiq32 = _coo_zeros( N_ineq_control, N_tot - N_u )
-	biq3 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq31, Aiq32], biq3, N_tot)
-
-	# upper control bounds
-	Aiq41 = scipy.sparse.identity(N_ineq_control)
-	Aiq42 = -scipy.sparse.identity(N_ineq_control)
-	Aiq43 = _coo_zeros(N_ineq_control, N + N_cycle_tot + N_lb + N_ub + N_err)
-	biq4 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq41, Aiq42, Aiq43], biq4, N_tot)
-
-	# lower cycle bounds: lb_i < cycle_matrix_i * ass_i
-	Aiq51 = _coo_zeros( N_ineq_cycle_lb, N_u + N_x )
-	Aiq52 = -scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
-	Aiq53 = scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
-	Aiq54 = _coo_zeros( N_ineq_cycle_lb, N_ub + N_err )
-	biq5 = np.zeros(N_ineq_cycle_lb)
-
-	_verify_dims([Aiq51, Aiq52, Aiq53, Aiq54], biq5, N_tot)
-
-	# upper cycle bounds: cycle_matrix_i * ass_i < ub_i
-	Aiq61 = _coo_zeros( N_ineq_cycle_lb, N_u + N_x )
-	Aiq62 = scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
-	Aiq63 = _coo_zeros( N_ineq_cycle_ub, N_lb )
-	Aiq64 = -scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
-	Aiq65 = _coo_zeros( N_ineq_cycle_lb, N_err )
-	biq6 = np.zeros(N_ineq_cycle_lb)
-
-	_verify_dims([Aiq61, Aiq62, Aiq63, Aiq64, Aiq65], biq6, N_tot)
-
-	# set sum(ub) < ub_tot, lb_tot < sum(lb)
-	Aiq71 = _coo_zeros(2, N_u + N_x + N_cycle_tot)
-	Aiq72 = scipy.sparse.block_diag( (-np.ones([1, N_lb]), np.ones([1, N_ub])) )
-	Aiq73 = _coo_zeros(2, N_err)
-	biq7  = np.array([ -Kl, Ku ])
-
-	_verify_dims([Aiq71, Aiq72, Aiq73], biq7, N_tot)
-
-	# cycles positive
-	Aiq81 = _coo_zeros(N_ineq_cycle_pos, N_u + N_x)
-	Aiq82 = -scipy.sparse.identity( N_ineq_cycle_pos )
-	Aiq83 = _coo_zeros(N_ineq_cycle_pos, N_lb + N_ub + N_err)
-	biq8 = np.zeros(N_ineq_cycle_pos)
-
-	_verify_dims([Aiq81, Aiq82, Aiq83], biq8, N_tot)
-
-	Aiq1 = scipy.sparse.bmat([ [ Aiq11, Aiq12, Aiq13, Aiq14 ]] )
-	Aiq2 = scipy.sparse.bmat([ [ Aiq21, Aiq22, Aiq23, Aiq24 ]] )
-	Aiq3 = scipy.sparse.bmat([ [ Aiq31, Aiq32 ]] )
-	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
-	Aiq5 = scipy.sparse.bmat([ [ Aiq51, Aiq52, Aiq53, Aiq54 ]] )
-	Aiq6 = scipy.sparse.bmat([ [ Aiq61, Aiq62, Aiq63, Aiq64, Aiq65 ]] )
-	Aiq7 = scipy.sparse.bmat([ [ Aiq71, Aiq72, Aiq73 ]] )
-	Aiq8 = scipy.sparse.bmat([ [ Aiq81, Aiq82, Aiq83 ]] )
-
-	Aiq = scipy.sparse.bmat([ [Aiq1], [Aiq2], [Aiq3], [Aiq4], 
-							  [Aiq5], [Aiq6], [Aiq7], [Aiq8] ])
-	biq = np.hstack([biq1, biq2, biq3, biq4, biq5, biq6, biq7, biq8 ])
-
-	# no cost function
-	c = np.zeros(N_tot)
-
-	end = time.time()
-	if verbosity >= 1: print "It took ", end - start, " to set up (I)LP"
-	start = time.time()
-
-	if integer:
-		if verbosity >= 1: print "solving ILP..."
-		lp_sln = solve_mip(c, Aiq, biq, Aeq, beq, set(range(N_u)))
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
-	else:
-		if verbosity >= 1: print "solving LP..."
-		lp_sln = solve_lp(c, Aiq, biq, Aeq, beq)
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve LP"
-
-	x_out = lp_sln['x']
-
-	if verbosity >= 2:
-		print ""
-		print "### Cycles ###"
-
-	final_c = []
-	final_a = []
-	index_ai =  lambda i : N_u + N_x + sum([N_cycle[ii] for ii in range(i) ])  	# starting index for a[i], i = 0, ..., C-1
-	for i in range(len(cycle_set)):
-		alpha_i = list(x_out[index_ai(i): index_ai(i) + len(cycle_set[i])])
-		if sum( alpha_i ) > 1e-5:
-			if verbosity >= 2:
-				print ""
-				print "Cycle: ", cycle_set[i]
-				print "Cycle mode-count: ", next(_cycle_rows(G,cycle_set[i], mode))
-				print "Assignment: ", alpha_i
-				print "Sum: ", sum(alpha_i)
-				print "Bounds: ", cycle_maxmin(G, cycle_set[i], mode, alpha_i)
-			final_c.append(cycle_set[i])
-			final_a.append(alpha_i)
-
-	sol = {}
-	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
-	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
-	sol['cycles'] = final_c
-	sol['assignments'] = final_a
-	sol['forbidden_nodes'] = forbidden_nodes
-
-	if verbosity >= 1:
-		print ""
-		print "Guaranteed trans interval: [", Kl_trans, ", ", Ku_trans, "]"
-		print "Actual transient interval: ", states_maxmin(G, sol['states'], mode)
-		print "Guaranteed ss interval: [", Kl, ", ", Ku, "]"
-		print "Actual ss guaranteed: ", cycles_maxmin(G,final_c, mode, final_a)
-		print ""
-
-	if verification:
-		for t in range(1,T+1):
-			# check that sol obeys dynamics up to time T
-			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-10))
-
-	return sol
-
-def synthesize_opt(G, init, T, K, mode, cycle_set = [], forbidden_nodes = [], order_fcn = None, integer = False, verbosity = 1, verification = False):
-
-	if order_fcn == None:
-		nodelist = G.nodes()
-		order_fcn = lambda v : nodelist.index(v)
-
-	A,B = lin_syst(G, order_fcn)
-	maxmode = _maxmode(G)
-	N = A.shape[1]
-
-	assert(len(G) == N / maxmode)
-
-	# fill out cycle set
-	if len(cycle_set) == 0:
-		if verbosity >= 1: print "no cycles given, enumerating..."
-		# enumerate all simple cycles
-		for c in nx.simple_cycles(G):
-			if not set(forbidden_nodes) & set(c):
-				# only care about cycles not involving roots
-				cycle_set.append(c)
-		if verbosity >= 1: print "finished enumerating"
-	### SET UP LP ###
-	start = time.time()
-
-	# optimization vector is 
-	# 
-	#  [ u[0], ..., u[T-1], x[0], ..., x[T], a[0], ..., a[C-1], Kl[1], ..., Kl[C], Ku[1], ..., Ku[C], Kl, Ku, err ]
-	#
-
-	N_cycle = [len(cycle) for cycle in cycle_set]  	# length of cycles
-
-	# variable block dimensions
-	N_u 	= T * N 			# input vars
-	N_x     = (T+1) * N 		# state vars
-	N_cycle_tot = sum(N_cycle)	# cycle vars
-	N_lb 	= len(cycle_set)	# lb vars
-	N_ub 	= len(cycle_set)	# ub vars
-	N_lb_tot = 1
-	N_ub_tot = 1
-	N_err = 1
-
-	N_tot = N_u + N_x + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err
-
-	# number of equalities
-	N_eq_dyn = N * T 	  # dynamics
-	N_eq_0 = len(G)  # initial state agreement
-	N_eq_T = len(G)  # time T constraint
-	N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
-
-	# number of inequalities
-	N_ineq_mc_trans = T+1 	 					# transient mode constraint
-	N_ineq_control = N_u 						# upper/lower ctrl bounds
-	N_ineq_cycle_lb = N_cycle_tot				# upper bounds on cycle
-	N_ineq_cycle_ub = N_cycle_tot				# upper bounds on cycle
-	N_ineq_cycle_pos = N_cycle_tot
-	N_ineq_tot_lb = 1
-	N_ineq_tot_ub = 1
-	N_ineq_err = 2
-
-	# Compute cycle -> vertex matrices for all cycles
-	Psi_mats = []    # matrices cycle -> state
-	for cycle in cycle_set:
-		Psi = _cycle_indices(G, cycle, order_fcn)
-		if verification:
-			assert(Psi.shape[0] == len(G))
-			assert(Psi.shape[1] == len(cycle))
-		Psi_mats.append( Psi )
-
-
-	# Build equality constraints Aeq x = beq
-
-	if verbosity >= 1: print "setting up equality constraints"
-
-	# dynamics constraints
-	Aeq11 = _dyn_eq_mat(A,B,T)
-	Aeq12 = scipy.sparse.coo_matrix( (N_eq_dyn, N_cycle_tot + N_lb + N_ub  + N_lb_tot + N_ub_tot + N_err) )
-	beq1 = np.zeros( N_eq_dyn )
-
-	if verification: _verify_dims([Aeq11, Aeq12], beq1, N_tot)
-	Aeq1 = scipy.sparse.bmat([[ Aeq11, Aeq12 ]])
-
-	# initial constraints
-	Aeq21 = scipy.sparse.coo_matrix( (N_eq_0, N_u) )						 	# zeros
-	Aeq22 = _stacked_eye(G)
-	Aeq23 = scipy.sparse.coo_matrix( (N_eq_0,  N * T + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err) )				# zeros
-	beq2 = np.array(init)
-
-	if verification: _verify_dims([Aeq21, Aeq22, Aeq23], beq2, N_tot)
-	Aeq2 = scipy.sparse.bmat([[ Aeq21, Aeq22, Aeq23 ]]) 
-
-	# final constraints
-	Aeq31 = scipy.sparse.coo_matrix( (N_eq_T, N_u + N*T) )
-	Aeq32 = _stacked_eye(G)
-	Aeq33 = -scipy.sparse.bmat([ Psi_mats ])
-	Aeq34 = _coo_zeros( N_eq_T, N_lb + N_ub  + N_ub_tot + N_lb_tot + N_err )
-	beq3 = np.zeros(N_eq_T)
-
-	if verification: _verify_dims([Aeq31, Aeq32, Aeq33, Aeq34], beq3, N_tot)
-	Aeq3 = scipy.sparse.bmat([[ Aeq31, Aeq32, Aeq33, Aeq34]]) 
-
-	# no nodes exited state space constraint
-	Aeq41 = _coo_zeros( 1, N_u + N*T )
-	Aeq42 = np.ones([1, N])
-	Aeq43 = _coo_zeros( 1, N_cycle_tot + N_lb + N_ub  + N_ub_tot + N_lb_tot + N_err )
-	beq4 = np.array([ np.sum(init) ])
-	
-	if verification: _verify_dims([Aeq41, Aeq42, Aeq43], beq4, N_tot)
-	Aeq4 = scipy.sparse.bmat([[ Aeq41, Aeq42, Aeq43]]) 
-
-	# forbidden node constraints
-	Aeq5 = scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
-		( range(N_eq_forbidden) , 
-		 [ N_u + t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
-		) ),
-		 (N_eq_forbidden, N_tot) )
-	beq5 = np.zeros(N_eq_forbidden)
-
-	if verification: _verify_dims([Aeq5], beq5, N_tot)
-	
-	if N_eq_forbidden:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4], [Aeq5]])
-		beq = np.hstack([beq1, beq2, beq3, beq4, beq5])
-	else:
-		Aeq = scipy.sparse.bmat([[ Aeq1], [Aeq2], [Aeq3], [Aeq4]])
-		beq = np.hstack([beq1, beq2, beq3, beq4])
-
-
-	# Build inequality constraints Aiq x <= biq
-	if verbosity >= 1: print "setting up inequality constraints"
-
-	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), 
-									(1, N) )
-
-	# lower bound mode counting
-	Aiq11 = _coo_zeros( N_ineq_mc_trans, N_u)
-	Aiq12 = scipy.sparse.block_diag( (-sum_mode_mat,) * (T+1) )
-	Aiq13 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub)
-	Aiq14 = scipy.sparse.coo_matrix( ( np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
-	Aiq15 = _coo_zeros( N_ineq_mc_trans, N_ub_tot + N_err)
-	biq1 = np.zeros(N_ineq_mc_trans)
-
-	_verify_dims([Aiq11, Aiq12, Aiq13, Aiq14, Aiq15], biq1, N_tot)
-
-	# upper bound mode counting
-	Aiq21 = Aiq11
-	Aiq22 = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
-	Aiq23 = _coo_zeros( N_ineq_mc_trans, N_cycle_tot + N_lb + N_ub + N_lb_tot)
-	Aiq24 = scipy.sparse.coo_matrix( (- np.ones(T+1), ( range(T+1), np.zeros(T+1) )  ), (T+1, 1) )
-	Aiq25 = _coo_zeros( N_ineq_mc_trans, N_err)
-	biq2 = np.zeros(N_ineq_mc_trans)
-
-	_verify_dims([Aiq21, Aiq22, Aiq23, Aiq24, Aiq25], biq2, N_tot)
-
-	# lower control bounds
-	Aiq31 = -scipy.sparse.identity( N_u )
-	Aiq32 = _coo_zeros( N_ineq_control, N_tot - N_u )
-	biq3 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq31, Aiq32], biq3, N_tot)
-
-	# upper control bounds
-	Aiq41 = scipy.sparse.identity(N_ineq_control)
-	Aiq42 = -scipy.sparse.identity(N_ineq_control)
-	Aiq43 = _coo_zeros(N_ineq_control, N + N_cycle_tot + N_lb + N_ub + N_lb_tot + N_ub_tot + N_err)
-	biq4 = np.zeros(N_ineq_control)
-
-	_verify_dims([Aiq41, Aiq42, Aiq43], biq4, N_tot)
-
-	# lower cycle bounds: lb_i < cycle_matrix_i * ass_i
-	Aiq51 = _coo_zeros( N_ineq_cycle_lb, N_u + N_x )
-	Aiq52 = -scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
-	Aiq53 = scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
-	Aiq54 = _coo_zeros( N_ineq_cycle_lb, N_ub + N_lb_tot + N_ub_tot + N_err )
-	biq5 = np.zeros(N_ineq_cycle_lb)
-
-	_verify_dims([Aiq51, Aiq52, Aiq53, Aiq54], biq5, N_tot)
-
-	# upper cycle bounds: cycle_matrix_i * ass_i < ub_i
-	Aiq61 = _coo_zeros( N_ineq_cycle_lb, N_u + N_x )
-	Aiq62 = scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
-	Aiq63 = _coo_zeros( N_ineq_cycle_ub, N_lb )
-	Aiq64 = -scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
-	Aiq65 = _coo_zeros( N_ineq_cycle_lb, N_lb_tot + N_ub_tot + N_err )
-	biq6 = np.zeros(N_ineq_cycle_lb)
-
-	_verify_dims([Aiq61, Aiq62, Aiq63, Aiq64, Aiq65], biq6, N_tot)
-
-	# set sum(ub) < ub_tot, lb_tot < sum(lb)
-	Aiq71 = _coo_zeros(N_lb_tot + N_ub_tot, N_u + N_x + N_cycle_tot)
-	Aiq72 = scipy.sparse.block_diag( (-np.ones([1, N_lb]), np.ones([1, N_ub])) )
-	Aiq73 = np.diag([1., -1.])
-	Aiq74 = _coo_zeros(N_lb_tot + N_ub_tot, N_err)
-	biq7  = np.zeros(N_lb_tot + N_ub_tot)
-
-	_verify_dims([Aiq71, Aiq72, Aiq73, Aiq74], biq7, N_tot)
-
-	# set err > ub - K,  err > K - lb
-	Aiq81 = _coo_zeros(2, N_u + N_x + N_cycle_tot + N_lb + N_ub)
-	Aiq82 = np.array([[ -1, 0, -1 ], [0, 1, -1]])
-	biq8  = np.array([ -K, K ])
-
-	_verify_dims([Aiq81, Aiq82], biq8, N_tot)
-
-	# cycles positive
-	Aiq91 = _coo_zeros(N_ineq_cycle_pos, N_u + N_x)
-	Aiq92 = -scipy.sparse.identity( N_ineq_cycle_pos )
-	Aiq93 = _coo_zeros(N_ineq_cycle_pos, N_lb + N_ub + N_lb_tot + N_ub_tot + N_err)
-	biq9 = np.zeros(N_ineq_cycle_pos)
-
-	_verify_dims([Aiq91, Aiq92, Aiq93], biq9, N_tot)
-
-	Aiq1 = scipy.sparse.bmat([ [ Aiq11, Aiq12, Aiq13, Aiq14, Aiq15 ]] )
-	Aiq2 = scipy.sparse.bmat([ [ Aiq21, Aiq22, Aiq23, Aiq24, Aiq25 ]] )
-	Aiq3 = scipy.sparse.bmat([ [ Aiq31, Aiq32 ]] )
-	Aiq4 = scipy.sparse.bmat([ [ Aiq41, Aiq42, Aiq43 ]] ) 
-	Aiq5 = scipy.sparse.bmat([ [ Aiq51, Aiq52, Aiq53, Aiq54 ]] )
-	Aiq6 = scipy.sparse.bmat([ [ Aiq61, Aiq62, Aiq63, Aiq64, Aiq65 ]] )
-	Aiq7 = scipy.sparse.bmat([ [ Aiq71, Aiq72, Aiq73, Aiq74 ]] )
-	Aiq8 = scipy.sparse.bmat([ [ Aiq81, Aiq82 ]] )
-	Aiq9 = scipy.sparse.bmat([ [ Aiq91, Aiq92, Aiq93 ]] )
-
-	Aiq = scipy.sparse.bmat([ [Aiq1], [Aiq2], [Aiq3], [Aiq4], 
-							  [Aiq5], [Aiq6], [Aiq7], [Aiq8], 
-							  [Aiq9] ])
-	biq = np.hstack([biq1, biq2, biq3, biq4, biq5, biq6, biq7, biq8, biq9])
-
-	# cost function
-	c = np.zeros(N_tot)
-	c[-1] = 1
-
-	end = time.time()
-	if verbosity >= 1: print "It took ", end - start, " to set up (I)LP"
-	start = time.time()
-
-	if integer:
-		if verbosity >= 1: print "solving ILP..."
-		lp_sln = solve_mip(c, Aiq, biq, Aeq, beq, set(range(N_u)))
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve ILP"
-	else:
-		if verbosity >= 1: print "solving LP..."
-		lp_sln = solve_lp(c, Aiq, biq, Aeq, beq)
-		end = time.time()
-		if verbosity >= 1: print "It took ", end - start, " to solve LP"
-
-        x_out = lp_sln['x']
-	err_out = x_out[-1]
-
-	if verbosity >= 2:
-		print ""
-		print "### Cycles ###"
-
-	final_c = []
-	final_a = []
-	index_ai =  lambda i : N_u + N_x + sum([N_cycle[ii] for ii in range(i) ])  	# starting index for a[i], i = 0, ..., C-1
-	for i in range(len(cycle_set)):
-		alpha_i = list(x_out[index_ai(i): index_ai(i) + len(cycle_set[i])])
-		if sum( alpha_i ) > 1e-5:
-			if verbosity >= 2:
-				print ""
-				print "Cycle: ", cycle_set[i]
-				print "Cycle mode-count: ", next(_cycle_rows(G,cycle_set[i], mode))
-				print "Assignment: ", alpha_i
-				print "Sum: ", sum(alpha_i)
-				print "Bounds: ", cycle_maxmin(G, cycle_set[i], mode, alpha_i)
-			final_c.append(cycle_set[i])
-			final_a.append(alpha_i)
-
-	sol = {}
-	sol['controls'] = np.array(x_out[:N_u]).reshape(T,N).transpose()
-	sol['states'] = np.array(x_out[N_u:N_u+N_x]).reshape(T+1,N).transpose()
-	sol['cycles'] = final_c
-	sol['assignments'] = final_a
-	sol['forbidden_nodes'] = forbidden_nodes
-
-	if verbosity >= 1:
-		print ""
-		print "Error: ", err_out
-		print "Guaranteed interval: [", K-err_out, ", ", K+err_out, "]"
-		print "Transient interval: ", states_maxmin(G, sol['states'], mode)
-		print "Steady state guaranteed: ", cycles_maxmin(G,final_c, mode, final_a)
-		print ""
-
-	if verification:
-		for t in range(1,T+1):
-			# check that sol obeys dynamics up to time T
-			assert (np.all(np.abs(A.dot(sol['states'][:,t-1]) + B.dot(sol['controls'][:,t-1]) - sol['states'][:,t]) < 1e-10))
 
 	return sol
 
@@ -1702,6 +512,9 @@ def simulate(G, sol, order_fcn, nodelist = []):
 
 	edge_anim = [ (v, w, plt.plot(pos[v], pos[w], marker='o', color = 'w', markersize=10) ) for v,w in subgraph.edges_iter()]
 
+	def _sum_modes(state, maxmode):
+		return np.sum([state[ i * len(state)/maxmode : (i+1) * len(state)/maxmode] for i in range(maxmode)], axis=0)
+
 	# Function that updates node colors
 	def update(i):
 		x_ind = i/ANIM_STEP
@@ -1735,10 +548,290 @@ def simulate(G, sol, order_fcn, nodelist = []):
 	ani = animation.FuncAnimation(fig, update, tmax * ANIM_STEP, interval=10, blit=False)
 	return ani
 
+################################################################
+###### Functions used in treating input data #######
+################################################################
+
+def _clean_cycle_set(cycle_set, forbidden_nodes):
+	'''
+	Purge cycles in 'cycle_set' that contain 'forbidden_nodes'
+	'''
+	new_cycle_set = []
+
+	forbidden_nodes_set = set(forbidden_nodes)
+	for cycle in cycle_set:
+		if len( forbidden_nodes_set.intersection(set(cycle))) == 0:
+			new_cycle_set.append(cycle) 
+
+	return new_cycle_set
+
+def _extract_arguments(problem_data):
+	'''
+	Helper function to treat problem data input.
+	'''
+	G = problem_data['graph']
+	T = problem_data['horizon']
+	N = len(G) * _maxmode(G)
+
+	# Integer program?
+	try: ilp = problem_data['ilp']
+	except: ilp = True
+
+	try: order_fcn = problem_data['order_function']
+	except: print "no order function provided, may be slow"; order_fcn = G.nodes().index
+
+	try: forbidden_nodes = problem_data['forbidden_nodes'] 
+	except: print "no forbidden nodes given"; forbidden_nodes = []
+
+	return G, T, N, ilp, order_fcn, forbidden_nodes
+
+################################################################
+###### Functions used to construct linear (in)equalities #######
+################################################################
+
+def _ux_constraints(G, init, T, order_fcn, forbidden_nodes = []):
+	'''	 
+	Computes Aeq, beq, Aiq, biq, s.t.
+		Aeq X = beq, Aiq X <= biq
+	enforces the following constraints for control and state
+	  - initial state
+	  - no exit
+	  - dynamics
+	  - control bounds
+	  - forbidden nodes,
+	for the variable vector	  
+		X = [ u[0], ..., u[T-1], x[0], ..., x[T] ]
+	'''
+	A,B = lin_syst(G, order_fcn)
+	maxmode = _maxmode(G)
+	N = A.shape[1]
+	assert(len(G) == N / maxmode)
+
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	###############################
+	#### Dynamics constraints #####
+	###############################
+	N_eq_dyn = N * T 	  # dynamics
+	Aeq = _dyn_eq_mat(A,B,T)
+	beq = np.zeros( N_eq_dyn )
+
+	###############################
+	##### Initial constraints #####
+	###############################
+	Aeq = _sparse_vstack( Aeq, _stacked_eye(G), N_u )
+	beq = np.hstack( [beq, init ] )
+
+	###############################
+	########### No exit ###########
+	###############################
+	Aeq = _sparse_vstack(Aeq, np.ones([1,N]), N_u + N*T)
+	beq = np.hstack([beq, [np.sum(init)]])
+
+	###############################
+	#### No forbidden nodes #######
+	###############################
+	if len(forbidden_nodes) > 0:
+		N_eq_forbidden = (T+1) * maxmode * len(forbidden_nodes) # forbidden nodes constraint
+		Aeq = _sparse_vstack(Aeq, 
+			scipy.sparse.coo_matrix( (np.ones(N_eq_forbidden), 
+									 	(range(N_eq_forbidden) , 
+			 							[ t * N + _stateind(G, f_node, m, order_fcn) for f_node in forbidden_nodes for t in range(T+1) for m in range(1, maxmode+1)  ]  
+										) 
+									 ),	
+			 						(N_eq_forbidden, N_x) ), 
+						    N_u )
+		beq = np.hstack([beq, np.zeros(N_eq_forbidden)])
+
+	###############################
+	#### Lower control bounds #####
+	###############################
+	Aiq = scipy.sparse.bmat([[-scipy.sparse.identity( N_u ), _coo_zeros(N_u, N_x)]])
+	biq = np.zeros(N_u)
+
+	###############################
+	#### Upper control bounds #####
+	###############################
+	Aiq = _sparse_vstack(Aiq, 
+			scipy.sparse.bmat([[scipy.sparse.identity(N_u), 
+							   -scipy.sparse.identity(N_u)]]),
+			0)
+	biq = np.hstack([biq, np.zeros(N_u)])
+
+	return Aeq, beq, Aiq, biq
+
+def _prefix_mc(G, T, N, mode, lb, ub):
+	'''Compute Aiq, biq s.t. if
+		Aiq X <= biq,
+	mode-counts during prefix phase are enforced, for variable vector
+		X = [ x[0], ..., x[T] ]
+	'''
+
+	N_ineq_mc_prefix = T+1
+	sum_mode_mat = scipy.sparse.coo_matrix( ( np.ones(len(G)), ( np.zeros(len(G)), [(mode - 1)*len(G) + i for i in range(len(G))] ) ), (1, N) )
+	prefix_mc_x_block = scipy.sparse.block_diag( (sum_mode_mat,) * (T+1) )
+
+	return scipy.sparse.bmat([[-prefix_mc_x_block], [prefix_mc_x_block]]), \
+		   np.hstack([ -lb * np.ones(N_ineq_mc_prefix), ub * np.ones(N_ineq_mc_prefix) ])
+
+def _suffix_mc(G, cycle_set, mode):
+	'''Compute Aiq, biq s.t. if
+		Aiq X <= biq,
+	cycle-wise mode-counts for cycle i during suffix phase are bounded in 
+	[ lb[i], ub[i] ], for variable vector
+		X = [a[0], ..., a[C-1], lb[0], ..., lb[C-1], ub[0], ..., ub[C-1]]
+	'''
+
+	# number of inequalities for lb/ ub
+	N_ineq_cycle_bound = sum([len(cycle) for cycle in cycle_set])
+	N_bounds = len(cycle_set)
+
+	cycle_matrix = scipy.sparse.block_diag( tuple( [ _cycle_matrix( G,c,mode ) for c in cycle_set ] ) )
+	bound_matrix = scipy.sparse.block_diag( tuple( [ np.ones([len(c), 1]) for c in cycle_set ] ) )
+	zero_matrix = _coo_zeros( N_ineq_cycle_bound, N_bounds )
+
+	# lower cycle bounds: lb_i < cycle_matrix_i * ass_i
+	# upper cycle bounds: cycle_matrix_i * ass_i < ub_i
+
+	Aiq = scipy.sparse.bmat([[-cycle_matrix, bound_matrix, zero_matrix], 
+					         [cycle_matrix, zero_matrix, -bound_matrix]])
+	biq = np.zeros(2 * N_ineq_cycle_bound)
+
+	return Aiq, biq
+
+def _dyn_eq_mat(A, B, T):
+	''' 
+	compute matrix Aeq s.t. if
+		Aeq X = 0 
+	for variable vector
+		X = [ u[0], ..., u[T-1], x[0], ..., x[T] ],
+	then
+	 	x[t+1] = A x[t] + B u[t] 
+	for t = 0, ..., T-1.
+	'''
+	N = A.shape[1]
+	m = B.shape[1]
+
+	N_eq_dyn = N * T
+
+	A_dyn_u = scipy.sparse.block_diag((B,) * T)
+	A_dyn_x = scipy.sparse.bmat( [[scipy.sparse.block_diag((A,) * T), scipy.sparse.coo_matrix( (N_eq_dyn, N) ) ]]) \
+		+  scipy.sparse.bmat( [[scipy.sparse.coo_matrix( (N_eq_dyn, N) ), -scipy.sparse.identity( N_eq_dyn ) ]]) \
+
+	return scipy.sparse.bmat([[A_dyn_u, A_dyn_x]])
+
+def _sparse_vstack(sparse_mat, block, col_pos):
+	'''
+	Constructs the matrix
+	[  sparse_mat; 
+	   0   block   0 ],
+	s.t. block starts at column 'col_pos' 
+	'''
+	ncol = sparse_mat.shape[1]
+	nrow = block.shape[0]
+
+	if col_pos > 0:
+		newblock = scipy.sparse.bmat([[ _coo_zeros(nrow, col_pos), block ]])
+	else:
+		newblock = block
+
+	if ncol - col_pos - block.shape[1] > 0:
+		newblock = scipy.sparse.bmat([[ newblock, _coo_zeros(nrow, ncol - col_pos - block.shape[1]) ]])
+
+	return scipy.sparse.bmat([ [ sparse_mat ], 
+							   [ newblock   ] ])
+
 def _stacked_eye(G):
+	'''
+	Constructs the N x (MN) matrix of identity matrices [ I I ... I ], 
+	where N is the number of nodes in G and M the number of nodes
+	'''
 	n_v = len(G)
 	n = len(G) * _maxmode(G)
 	return scipy.sparse.coo_matrix( (np.ones(n), ([ (i % n_v ) for i in range(n)], range(n) )), shape = (n_v, n) )
+
+def _coo_zeros(nrow,ncol):
+	'''
+	Create a scipy.sparse zero matrix with 'nrow' rows and 'ncol' columns
+	'''
+	return scipy.sparse.coo_matrix( (nrow,ncol) )
+
+################################################################
+###### Functions used to handle solutions #######
+################################################################
+
+def cyclequot(G, cycle, mode):
+	'''
+	For a given 'cycle', compute the proportion of nodes that are in 'mode' 
+	'''
+	return float(sum(next(_cycle_rows(G, cycle, mode))))/len(cycle)
+
+def cycle_maxmin(G, cycle, mode, assignment):
+	'''
+	For a given 'cycle' and 'assignment', compute mode-counting bounds for 'mode'
+	'''
+	prod = np.dot(np.array(_cycle_matrix(G,cycle,mode)), assignment)
+	return np.min(prod), np.max(prod)
+
+def suffix_maxmin(G, cycles, mode, assignments):
+	'''
+	Given a suffix strategy consisting of `cycles` and `assignments`, compute upper and lower mode-counting bounds
+	for the mode `mode`.
+	'''
+	return sum(np.array([cycle_maxmin(G, c, mode, a) for c,a in zip(cycles, assignments)]), 0)
+
+def prefix_maxmin(G, states, mode):
+	'''
+	Given a sequence of 'states', compute upper and lower mode-counting bounds
+	for the mode `mode`.
+	'''
+	modecount = np.sum(states[(mode-1)*len(G):mode*len(G), :], 0)
+	return [np.min(modecount), np.max(modecount)]
+
+def _print_sol(G, mode, sol):
+
+	for cycle, ass in zip(sol['cycles'], sol['assignments']):
+		print ""
+		print "Cycle: ", cycle
+		print "Cycle mode-count: ", next(_cycle_rows(G,cycle, mode))
+		print "Assignment: ", np.array(ass)
+		print "Sum: ", sum(ass)
+		print "Bounds: ", np.array(cycle_maxmin(G, cycle, mode, ass))
+
+	print ""
+	print "Prefix interval: ", np.array(prefix_maxmin(G, sol['states'], mode))
+	print "Suffix interval: ", np.array(suffix_maxmin(G, sol['cycles'], mode, sol['assignments']))
+	print ""
+
+def _extract_solution_state(sol_vector, N, T):
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	sol = {}
+	sol['controls'] = np.array(sol_vector[:N_u]).reshape(T,N).transpose()
+	sol['states'] = np.array(sol_vector[N_u:N_u+N_x]).reshape(T+1,N).transpose()
+	return sol
+
+def _extract_solution(sol_vector, N, T, cycle_set):
+	N_u 	= T * N 			# input vars
+	N_x     = (T+1) * N 		# state vars
+
+	sol = _extract_solution_state(sol_vector, N, T)
+	sol['cycles'] = []
+	sol['assignments'] = []
+
+	index_ai =  lambda i : N_u + N_x + sum([len(cycle_set[ii]) for ii in range(i) ])  	# starting index for a[i], i = 0, ..., C-1
+	for i in range(len(cycle_set)):
+		alpha_i = list(sol_vector[index_ai(i): index_ai(i) + len(cycle_set[i])])
+		if sum( alpha_i ) > 1e-5:
+			sol['cycles'].append(cycle_set[i])
+			sol['assignments'].append(alpha_i)
+	return sol
+
+################################################################
+##### Functions pertaining to graph/linear system indexing #####
+################################################################
 
 def _cycle_indices(G, ci, order_fcn = None):
 	"""
@@ -1754,48 +847,28 @@ def _cycle_indices(G, ci, order_fcn = None):
 	vals = np.ones(len(ci))
 	return scipy.sparse.coo_matrix((vals, (row_idx, col_idx)), shape = (len(G), len(ci)) )
 
-def _dyn_eq_mat(A, B, T):
-	# compute matrix Aeq s.t.
-	#  x(t+1) = Ax + Bu 
-	# for t = 0, ..., T-1
-	N = A.shape[1]
-	m = B.shape[1]
-
-	N_eq_dyn = N * T
-
-	A_dyn_u = scipy.sparse.block_diag((B,) * T)
-	A_dyn_x = scipy.sparse.bmat( [[scipy.sparse.block_diag((A,) * T), scipy.sparse.coo_matrix( (N_eq_dyn, N) ) ]]) \
-		+  scipy.sparse.bmat( [[scipy.sparse.coo_matrix( (N_eq_dyn, N) ), -scipy.sparse.identity( N_eq_dyn ) ]]) \
-
-	return scipy.sparse.bmat([[A_dyn_u, A_dyn_x]])
-
-def _verify_dims(list, hl, tot):
-	assert( np.sum([ mat.shape[1] for mat in list ]) == tot )
-	assert( np.all([ mat.shape[0] == len(hl) for mat in list ] ))
-
-def _coo_zeros(i,j):
-	return scipy.sparse.coo_matrix( (i,j) )
-
-def _maxmode(G):
-	return max([d['mode'] for (u,v,d) in  G.edges(data=True)])
-
 def _stateind(G, node, mode, order_fcn = None):
+	'''
+	For a given 'node' and 'mode' in the graph 'G', compute the index
+	of the node-mode state in the corresponding linear system, using
+	ordering given by order_fcn
+	'''
 	if order_fcn == None:
 		nodelist = G.nodes()
 		order_fcn = lambda v : nodelist.index(v)
 	return (mode - 1) * len(G) + order_fcn(node)
 
-def cyclequot(G, c, mode):
-	return float(sum(next(_cycle_rows(G, c, mode))))/len(c)
-
 def _cycle_matrix(G, cycle, mode):
+	'''
+	Comput a square matrix with rows given by _cycle_rows
+	'''
 	return [row for row in _cycle_rows(G, cycle, mode)]
 
 def _cycle_rows(G, C, mode):
-	"""
-		Return iterator that produces all combinations of 0/1 vectors vi for a given cycle C in a graph G,
-		such that vi[j] = 1 if   the mode of the edge (i + j mod L, i + j + 1 mod L) is `mode' 
-	"""
+	'''
+	Return iterator that produces all combinations of 0/1 vectors vi for a given cycle C in a graph G,
+	such that vi[j] = 1 if   the mode of the edge (i + j mod L, i + j + 1 mod L) is 'mode' 
+	'''
 	d = deque()
 	for i in range(len(C)):
 		v1 = C[i]
@@ -1805,22 +878,59 @@ def _cycle_rows(G, C, mode):
 		yield list(d)
 		d.rotate(-1)
 
-def _sum_modes(state, maxmode):
-	return np.sum([state[ i * len(state)/maxmode : (i+1) * len(state)/maxmode] for i in range(maxmode)], axis=0)
+def _maxmode(G):
+	'''
+	For a given graph 'G', find the largest mode integer.
+	'''
+	return max([d['mode'] for (u,v,d) in  G.edges(data=True)])
 
-def cycle_maxmin(G, cycle, mode, ass):
-	prod = np.dot(np.array(_cycle_matrix(G,cycle,mode)), ass)
-	return np.min(prod), np.max(prod)
+################################################################
+##### Functions used to round non-integer assignments ##########
+################################################################
 
-def cycles_maxmin(G, cycles, mode, assignments):
-	return sum(np.array([cycle_maxmin(G, c, mode, a) for c,a in zip(cycles, assignments)]), 0)
+def casc_round(list):
+	'''
+		Round entries in list while preserving total sum:
+		i_n = round(f_0 + ... + f_n) - (i_0 + ... + i_n-1)
+	'''
+	fp_total = 0.
+	int_total = 0
 
-def states_maxmin(G, states, mode):
-	modecount = np.sum(states[(mode-1)*len(G):mode*len(G), :], 0)
-	return [np.min(modecount), np.max(modecount)]
+	ret = [0] * len(list)
 
-def _psi_lower(G, cycle, assignment, mode):
-	return np.min([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])
+	for i,fp in enumerate(list):
+		ret[i] = round(fp_total + fp) - int_total
+		fp_total += fp
+		int_total += ret[i]
 
-def _psi_upper(G, cycle, assignment, mode):
-	return np.max([ np.dot(assignment, cr) for cr in _cycle_rows(G, cycle, mode)])
+	return ret
+
+def make_integer(assignments):
+	'''
+	Round assignments in 'assignments' using cascade rounding s.t.
+	 - sum of all assignments is preserved
+	 - every assignment is integral
+	'''
+	ass_sums = [sum(a) for a in assignments]
+	rounded_sums = casc_round(ass_sums)
+
+	for ass, int_sum in zip(assignments, rounded_sums):
+		diff = int_sum - sum(ass)
+		for j in range(len(ass)):
+			ass[j] = ass[j] + diff/len(ass)
+
+	return [casc_round(ass) for ass in assignments]
+
+def make_avg_integer(assignments):
+	'''
+	Round assignments in 'assignments' by first constructing average assignments s.t.
+	 - sum of all assignments is preserved
+	 - every assignment is integral
+	'''
+	ass_sums = [sum(a) for a in assignments]			# sum of assignments
+	rounded_sums = casc_round(ass_sums) 				# round assignment sums to integers
+
+	# create averaged assignments
+	avg_assignments = [ [rounded_sums[i]/len(assignments[i])] * len(assignments[i]) for i in range(len(assignments)) ]
+
+	return [casc_round(ass) for ass in avg_assignments]

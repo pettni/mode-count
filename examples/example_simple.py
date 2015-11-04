@@ -1,10 +1,12 @@
 """
 Example illustrating mode-counting synthesis on a manually defined graph.
 """
+import sys
 
 import networkx as nx
 import matplotlib.pyplot as plt 
 
+sys.path.append('../')
 from modecount import *
 
 # Define a simple graph
@@ -32,8 +34,8 @@ problem_data['cycle_set'] = [ cycle for cycle in nx.simple_cycles(G) ]  # all si
 
 # We want to bound mode-1-count between 15 and 16
 problem_data['mode'] = 1
-problem_data['lb'] = 15
-problem_data['ub'] = 16
+problem_data['lb_suffix'] = 15
+problem_data['ub_suffix'] = 16
 
 # Optional arguments
 problem_data['lb_prefix'] = 15
