@@ -44,50 +44,50 @@ np.set_printoptions(precision=4, suppress=True)
 
 class Abstraction(object):
 	""" 
-		Abstraction built on top of a networkx DiGraph
+		Discrete abstraction of the hyper box defined by *lower_bounds* and *upper_bounds*.
+		Time discretization is *tau* and space discretization is given by *eta*.
+		Mode transitions are added with :py:func:`add_mode`.
 	"""
-	def __init__(self, lb, ub, eta, tau):
+	def __init__(self, lower_bounds, upper_bounds, eta, tau):
 		self.eta = eta
 		self.tau = float(tau)
 
-		self.lb = np.array(lb, dtype=np.float64)
-		self.ub = np.array(ub, dtype=np.float64)
-		self.ub += (self.ub - self.lb) % eta # make domain number of eta's
+		self.lower_bounds = np.array(lower_bounds, dtype=np.float64)
+		self.upper_bounds = np.array(upper_bounds, dtype=np.float64)
+		self.upper_bounds += (self.upper_bounds - self.lower_bounds) % eta # make domain number of eta's
 		self.nextMode = 1
 
 		# number of discrete points along each dimension
-		self.n_dim = np.round((self.ub - self.lb)/eta).astype(int)
+		self.n_dim = np.round((self.upper_bounds - self.lower_bounds)/eta).astype(int)
 
 		# Create a graph and populate it with nodes
 		self.graph = nx.DiGraph()
 		for midx in itertools.product(*[range(dim) for dim in self.n_dim]):
-			cell_lb = self.lb + np.array(midx) * eta
-			cell_ub = cell_lb + eta
-			self.graph.add_node(midx, lb = tuple(cell_lb), ub = tuple(cell_ub), mid = (cell_lb + cell_ub) / 2)
+			cell_lower_bounds = self.lower_bounds + np.array(midx) * eta
+			cell_upper_bounds = cell_lower_bounds + eta
+			self.graph.add_node(midx, lower_bounds = tuple(cell_lower_bounds), upper_bounds = tuple(cell_upper_bounds), mid = (cell_lower_bounds + cell_upper_bounds) / 2)
 
 	def __len__(self):
+		''' Size of abstraction '''
 		return len(self.graph)
 
-	def point_to_midx(self, pt):
-		""" 
-			Return the discrete multiindex corresponding to a given continuous point
-		"""
-		assert(len(pt) == len(self.n_dim))
-		if not self.contains(pt):
+	def point_to_midx(self, point):
+		'''	Return the node multiindex corresponding to the continuous point *point*. '''
+		assert(len(point) == len(self.n_dim))
+		if not self.contains(point):
 			raise('Point outside domain')
-		midx = np.floor((np.array(pt) - self.lb) / self.eta).astype(np.uint64)
+		midx = np.floor((np.array(point) - self.lower_bounds) / self.eta).astype(np.uint64)
 		return tuple(midx)
 
-	def contains(self, pt):
-		if np.any(self.lb >= pt) or np.any(self.ub <= pt):
+	def contains(self, point):
+		''' Return ``True`` if *point* is within the abstraction domain, ``False`` otherwise. '''
+		if np.any(self.lower_bounds >= point) or np.any(self.upper_bounds <= point):
 			return False
 		return True
 
 	def plot_planar(self):
-		"""
-			In 2d case, plot abstraction with transitions
-		"""
-		assert(len(self.lb) == 2)
+		'''	Plot a 2D abstraction. '''
+		assert(len(self.lower_bounds) == 2)
 		ax = plt.axes()
 		for node, attr in self.graph.nodes_iter(data = True):
 			plt.plot(attr['mid'][0], attr['mid'][1], 'ro')
@@ -100,10 +100,7 @@ class Abstraction(object):
 		plt.show()
 
 	def add_mode(self, vf):
-		"""
-			Add new dynamic mode to the abstraction, given by
-			the vector field vf 
-		"""
+		'''	Add new dynamic mode to the abstraction, given by the vector field *vf*. '''
 		dummy_vf = lambda z,t : vf(z)
 		tr_out = 0
 		for node, attr in self.graph.nodes_iter(data=True):
@@ -118,11 +115,10 @@ class Abstraction(object):
 		self.nextMode += 1
 
 	def node_to_idx(self, node):
-		# Given a node (x1,x2,x3, ...),
-		# return the list index on the form
-		#
-		#   Lz ( Ly (x) + y ) + z
-		# 
+		''' Given a node :math:`(x,y,z)`, return the list index :math:`L_z ( L_y x + y ) + z`, 
+			where :math:`L_z, L_y` are the (discrete) lengths of the hyper box domain,
+			and correspondingly for higher dimensions. The function is a 1-1 mapping between
+			the nodes in the abstraction and the positive integers. '''
 		assert len(node) == len(self.n_dim)
 		ret = node[0]
 		for i in range(1,len(self.n_dim)):
@@ -131,7 +127,7 @@ class Abstraction(object):
 		return ret
 
 	def idx_to_node(self, idx):
-		# Inverse to node_to_idx
+		''' Inverse of :py:func:`node_to_idx` '''
 		assert(idx < np.product(self.n_dim))
 		node = [0] * len(self.n_dim)
 		for i in reversed(range(len(self.n_dim))):
@@ -171,29 +167,23 @@ class CycleControl():
 		return np.array(sol['x']).flatten()
 
 def verify_bisim(beta, tau, eta, eps):
+	''' Given a :math:`\mathcal{KL}`-function *beta* for a continuous system, return ``True`` if the abstraction
+	created with time discretization *tau* and space discretization *eta* passes the *eps*-approximate bisimilarity
+	test, and ``False`` otherwise. '''
 	return (beta(eps, tau) + eta/2 <= eps)
 
-def draw_modes(G):
-	""" 
-		Given a DiGraph G, w
-
-	"""
-	maxmode = max([d['mode'] for (u,v,d) in  G.edges(data=True)]) + 1
-	edgelists = [ [(u,v) for (u,v,d) in G.edges(data=True) if d['mode'] == mode ]  for mode in range(1, maxmode)]
-	colors = iter(plt.cm.rainbow(np.linspace(0,1,len(edgelists) + 1)))
-	
-	pos = nx.spring_layout(G)
-	nx.draw_networkx_nodes(G, pos, node_color = [next(colors)] * G.number_of_nodes() )
-	for i, edgelist in enumerate(edgelists):
-		nx.draw_networkx_edges(G, pos, edgelist = edgelist, edge_color = [next(colors)] * len(edgelist))
-	nx.draw_networkx_labels(G,pos)
-
 def lin_syst(G, order_fcn = None):
-	""" 
-		Return matrices A,B such that
-		[w_1(t+1); w_2(t+1); ...] = A [w_1(t); w_2(t); ...] + B [r_1(t); r_2(t); ...]
-		for modes 1, 2 ...
-	"""
+	''' Given a graph *G* with edges labeled with integers :math:`1, ..., M`, compute
+	 	matrices :math:`A,B` such that 
+
+	 	.. math:: \mathbf w(t+1) = A \mathbf w + B \mathbf r,
+
+	 	where :math:`w_i` represents the number of individual systems at node :math:`n` in mode :math:`m` if
+
+	 	.. math:: i = (m-1) K + order\_fcn(n).
+
+	 	If no order function is specified, ordering by **G.nodes().index** is used.
+	'''
 	if order_fcn == None:
 		order_fcn = lambda v : G.nodes().index(v)
 
@@ -213,8 +203,7 @@ def prefix_feasible(problem_data, verbosity = 1):
     synthesis problem (requires a given suffix part)
      
     Inputs:
-        
-        problem_data: dictionary with the following fields:
+      problem_data: dictionary with the following fields:
         'graph'           : mode-transition graph G ( i.e., edges are labeled with integers 1, ..., M )
                              class: networkx.DiGraph
         'init'            : initial configuration in G

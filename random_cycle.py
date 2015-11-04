@@ -70,7 +70,26 @@ def dfs(G, node, visited, forbidden, min_length, mode_weight, temp_forbidden = s
 		# need to pick another vertex!
 		return dfs(G, node, visited, forbidden.union(set([next_node])), min_length, mode_weight)
 
-def random_cycle(G, min_length = 5, mode_weight = 0.5):
+def random_cycle(G, min_length = 2, mode_weight = 0.5):
+	'''
+	Generate a random simple cycle in the graph G
+
+	Inputs:
+	  G 	      : graph to search in
+	  		         class: networkx DiGraph
+	  min_length  : minimal cycle length to consider
+	  				 type: int
+	  mode_weight : when randomly selecting successors, select same mode with 
+	  				this probability
+	  				 type: double in interval [0,1]
+	Returns:
+	  cycle  	  : list of nodes in G
+	  False		  : if no simple cycle longer than min_length exists
+
+	Comments: - exhaustive search can be slow, best for graphs with an abundance of cycles
+			  - algorithm is a randomized DFS 
+			  - the probability for a given cycle to be selected is unknown and is not uniform
+	'''
 	cycle = False
 	tried_nodes = set([])
 	while not cycle: 
