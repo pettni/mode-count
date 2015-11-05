@@ -22,6 +22,7 @@ python example_abstraction_lin2d.py
 ```
 python -m unittest discover
 ```
-##
 
-[See also](doc/documentation.rst)
+## Further documentation
+
+[See the sphinx documentation](doc/documentation.rst) (uncompiled)
