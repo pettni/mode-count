@@ -20,6 +20,8 @@ which takes as argument a function representing a vector field::
 	# \dot x_1 =  x_0
 	ab.add_mode( lambda x: [ -x[1], x[0] ] )
 
+	ab.plot_planar() # plot it
+
 .. autoclass:: Abstraction
 	:noindex:
 
@@ -54,8 +56,7 @@ To alleviate the computational burden required by solving an ILP, the following 
 2. Round the suffix part to integers
 3. Find a prefix to the suffix
 
-The suffix part of a non-integer strategy resulting from an LP can be rouded using :py:func:`make_integer`.
-Then, :py:func:`prefix_feasible` can be called to solve a (significantly smaller) ILP in order to find a 
+The suffix part of a non-integer strategy resulting from an LP can be rouded using :py:func:`make_integer`. Then, :py:func:`prefix_feasible` can be called to solve a (significantly smaller) ILP in order to find a 
 prefix strategy.::
 
 	# Set up and solve LP
@@ -65,7 +66,8 @@ prefix strategy.::
 	# Set up and solve ILP
 	int_data = nonint_data.copy()
 	int_data['ilp'] = True
-	int_data['cycle_set'] = nonint_solution['cycles']  # round the suffix part of LP solution
+	int_data['cycle_set'] = nonint_solution['cycles']  
+	# round the suffix part of LP solution
 	int_data['assignments'] = make_integer(nonint_solution['assignments'])
 
 	# Find a prefix
@@ -76,8 +78,7 @@ prefix strategy.::
 Implement strategy
 ==================
 
-A strategy synthesized as above can be simulated with an instance of :py:class:`CycleControl` as a linear system :math:`\mathbf{w}(t+1) + A \mathbf{w} + B \mathbf{r}`, where :math:`A,B` are given by :py:func:`lin_syst` (note that the same order function must
-be used throughout).::
+A strategy synthesized as above can be simulated with an instance of :py:class:`CycleControl`, which provides for a linear system :math:`\mathbf{w}(t+1) + A \mathbf{w} + B \mathbf{r}`. Such matrices :math:`A,B` can be computed by :py:func:`lin_syst` (note that the same order function must be used throughout).::
 	
 	# assume an abstraction ab has been created
 	problem_data = { ..., 'graph' = ab.graph, 'order_function' = ab.node_to_idx, ... }
@@ -90,4 +91,4 @@ be used throughout).::
 
 Example
 ========
-Examples are provided in the ``examples/`` directory.
+Working examples can be found in the ``examples/`` directory.
