@@ -22,14 +22,6 @@ python example_abstraction_lin2d.py
 ```
 python -m unittest discover
 ```
+##
 
-## Code overview
-
-Classes:
-* Abstraction, represents an abstraction of a switched dynamical system
-* CycleControl, computes mode-counting enforcing feedback controls
-
-Main methods:
-* lin_syst: returns a linear system description (A,B) of the aggregate dynamics on a graph
-* synthesize: solve a mode-counting problem on a mode-graph
-* simulate: simulate a synthesizes solution using matplotlib.animation
+[See also](doc/documentation.rst)
