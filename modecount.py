@@ -115,10 +115,12 @@ class Abstraction(object):
 		self.nextMode += 1
 
 	def node_to_idx(self, node):
-		''' Given a node :math:`(x,y,z)`, return the list index :math:`L_z ( L_y x + y ) + z`, 
+		''' Given a node at discrete multiindex :math:`(x,y,z)`, return the 
+			index :math:`L_z ( L_y x + y ) + z`, 
 			where :math:`L_z, L_y` are the (discrete) lengths of the hyper box domain,
-			and correspondingly for higher dimensions. The function is a 1-1 mapping between
-			the nodes in the abstraction and the positive integers. '''
+			and correspondingly for higher/lower dimensions. The function is a 1-1 mapping between
+			the nodes in the abstraction and the positive integers, and thus suitable as 
+			order_function in :py:func:`prefix_suffix_feasible`. '''
 		assert len(node) == len(self.n_dim)
 		ret = node[0]
 		for i in range(1,len(self.n_dim)):

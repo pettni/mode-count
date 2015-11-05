@@ -4,6 +4,17 @@
 Documentation
 ***************
 
+Dependencies
+===================
+
+* Python with working `numpy <http://www.numpy.org>`_, `scipy <http://www.scipy.org>`_, and `networkx <https://networkx.github.io>`_
+* `matplotlib <http://matplotlib.org>`_ (for plotting)
+* Optimization solvers. For ILP's, `Gurobi <http://www.gurobi.com>`_ is recommended. Another option is `Mosek <https://www.mosek.com/products/mosek>`_, which is the default for LP's.
+
+Installation
+===================
+Currently, no automatic installation is available. Execute files from the downloaded directory.
+
 Construct an abstraction
 ========================
 
@@ -11,7 +22,7 @@ There is a class :py:class:`Abstraction` for handling abstractions.
 Dynamical modes are added to the abstraction using the function :py:func:add_mode`, 
 which takes as argument a function representing a vector field::
 
-	# Create an abstraction of the 2D domain [-1,1]`,
+	# Create an abstraction of the 2D domain [-1,1]^2,
 	# with space and time discretization 0.1
 	ab = Abstraction([-1, -1], [1, 1], 0.1, 0.1)
 
