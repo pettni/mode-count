@@ -1,22 +1,55 @@
 """
-TCL example
+Example 5.2 from 
+
+Petter Nilsson and Necmiye Ozay, 
+Control synthesis for large collections of systems with mode-counting constraints,
+Proceedings of the International Conference on Hybrid Systems: Computation and Control, 2016
 """
 
 import numpy as np
 import networkx as nx
 
-import matplotlib.pyplot as plt
 import cPickle as pickle
 
 import os
 import sys
 
 sys.path.append('../')
-
 from modecount import *
-from models import tcl_model
 
-filename = "tcl_low_feas"
+# TCL parameters
+Cth = 2.
+Rth = 2.
+Pm = 5.6
+eta_tcl = 2.5
+
+# Ambient temperature
+theta_a = 32.
+
+# Derived constants
+a = 1./(Rth * Cth)
+b = eta_tcl / Cth
+
+# Define a vector fields
+vf_on = lambda theta : -a * ( theta - theta_a ) - b * Pm  # tcl on
+vf_off = lambda theta : -a * ( theta - theta_a ) 			# tcl off
+
+# Define a KL function beta(r,s) s.t. || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
+beta_on = lambda r,s : r * np.exp(-s*a)
+beta_off = lambda r,s : r * np.exp(-s*a)
+
+target_mc = 'high'    # 'high' or 'low'
+
+################################################
+################################################
+################################################
+
+assert target_mc in ['high', 'low']
+
+if  target_mc == 'high':
+	filename = "tcl_high_feas"
+elif target_mc == 'low':
+	filename = "tcl_low_feas"
 
 # population size
 pop_size = 10000
@@ -27,11 +60,18 @@ delta = 1
 
 # mode counting synthesis parameters
 T = 20 			# horizon
-Ku = 3210		# desired mode count over time
-Kl = 3190
-Ku_trans = 4000		# desired mode count over time
-Kl_trans = 2500
 mode = 1		# mode to count (1 or 2)
+
+if target_mc == 'high':
+	mc_lb = 3600
+	mc_ub = 3600			# desired mode count over time
+	mc_lb_prefix = 2500
+	mc_ub_prefix = 4600		# desired mode count over time
+elif target_mc == 'low':
+	mc_lb = 3200
+	mc_ub = 3200			# desired mode count over time
+	mc_lb_prefix = 2500
+	mc_ub_prefix = 4600		# desired mode count over time
 
 # Abstraction parameters
 lb = [theta_r - delta]		# lower bounds
@@ -40,31 +80,37 @@ eta = 0.00195				# space discretization
 tau = 0.05					# time discretization
 eps = 0.1					# desired bisimulation approximation
 
-# random seed
+# set random seed for repeatability
 np.random.seed(0)
 
 ############################################################
-############################################################
+## Define some filenames to save intermediate steps ########
 ############################################################
 
+name_suffix = str(T) + "_" + str(mode) + "_" + str([mc_lb, mc_ub, mc_lb_prefix, mc_ub_prefix]) + "_" + str(pop_size) + ".save"
+
+# save abstraction
 filename_abs = filename + "_abstraction_" + str(eta) + str(tau) + ".save"
-filename_data = filename + "_data_" + str(T) + "_" + str(mode) + "_" + str([Ku, Kl]) + "_" + str(pop_size) + ".save"
-filename_plotdata = filename + "_plotdata_" + str(T) + "_" + str(mode) + "_" + str([Ku, Kl]) + "_" + str(pop_size) + ".save"
-filename_hist = filename + "_hist_" + str(T) + "_" + str(mode) + "_" + str([Ku, Kl]) + "_" + str(pop_size) + ".save"
 
-vf1, vf2, kl1, kl2 = tcl_model()
+# save controller data
+filename_controller = filename + "_controller_" + name_suffix
+
+# save simulation data
+filename_simulation = filename + "_simulation_" + name_suffix
+
+filename_hist = filename + "_hist_" + name_suffix
+
+############################################################
+############  Create a bunch of TCL's  #####################
+############################################################
+
+on_dyn = lambda z,t: vf_on(z)
+off_dyn = lambda z,t: vf_off(z)
 
 # Verify that abstraction is eps-approximate bisimulation
 # with respect to both KL functions
-assert(verify_bisim(kl1, tau, eta, eps))
-assert(verify_bisim(kl2, tau, eta, eps))
-
-############################################################
-############################################################
-############################################################
-d_on, d_off, _, _ = tcl_model()
-on_dyn = lambda z,t: d_on(z)
-off_dyn = lambda z,t: d_off(z)
+assert(verify_bisim(beta_on, tau, eta, eps))
+assert(verify_bisim(beta_off, tau, eta, eps))
 
 class TCL(object):
 
@@ -84,30 +130,30 @@ class TCL(object):
 ############################################################
 
 if os.path.isfile(filename_abs):
-	print "loading abstraction"
+	print "loading saved abstraction"
 	ab = pickle.load( open(filename_abs,'rb')  )
 else:
 	print "computing abstraction"
 	print "abstraction will have ", np.product((np.array(ub)-np.array(lb))/eta), " states"
 	ab = Abstraction(lb, ub, eta, tau)
-	ab.add_mode(vf1)
-	ab.add_mode(vf2)
+	ab.add_mode(d_on)
+	ab.add_mode(d_off)
 
-	pickle.dump(ab, open(filename_abs,'wb') )
+	pickle.dump(ab, open(filename_abs,'wb') ) # save it!
 
 G = ab.graph
 order_fcn = ab.node_to_idx
-
 print "Graph diameter: ", nx.diameter(G)
 
 ############################################################################
 ########## Load / generate TCL population and control strategy #############
 ############################################################################
 
-if os.path.isfile(filename_data):
-	print "loading saved data"
-	population, mc_sol_int = pickle.load(open(filename_data, 'rb'))
+if os.path.isfile(filename_controller):
+	print "loading saved population and controller"
+	population, mc_sol_int = pickle.load( open(filename_controller,'rb')  )
 else:
+
 	population = [TCL(22 + 1 * np.random.rand(1)) for i in range(pop_size)]
 
 	init = np.zeros(len(G))
@@ -128,30 +174,55 @@ else:
 	print "Max cycle ratio: ", max(c_quot_set)
 
 	# non-integer mode-counting synthesis
-	mc_sol_nonint = synthesize_feas(G, init, T, Kl, Ku, mode, cycle_set = cycle_set, \
-						 order_fcn = order_fcn, integer = False, verbosity = 1, Kl_trans = Kl_trans, Ku_trans = Ku_trans)
+	data_nonint = {}
+	data_nonint['graph'] = G
+	data_nonint['init'] = init
+	data_nonint['horizon'] = T
+
+	data_nonint['mode'] = mode
+	data_nonint['lb_suffix'] = mc_lb
+	data_nonint['ub_suffix'] = mc_ub
+	data_nonint['lb_prefix'] = mc_lb_prefix
+	data_nonint['ub_prefix'] = mc_ub_prefix
+
+	data_nonint['cycle_set'] = cycle_set
+
+	data_nonint['order_function'] = order_fcn
+	data_nonint['ilp'] = False
+
+	mc_sol_nonint = prefix_suffix_feasible( data_nonint )
+
+	print "nonint solution has prefix mc bounds ", prefix_maxmin(G, mc_sol_nonint['states'], mode)
+	print "nonint solution has suffix mc bounds ", suffix_maxmin(G, mc_sol_nonint['cycles'], mode, mc_sol_nonint['assignments'])
 
 	# make cycle set integer
-	cycle_set = mc_sol_nonint['cycles']
 	int_assignment = make_avg_integer(mc_sol_nonint['assignments'])
 
+	print "rounded solution has suffix mc bounds ", suffix_maxmin(G, mc_sol_nonint['cycles'], mode, int_assignment)
 
-	mc_sol_int = reach_cycles_feas(G, init, T, mode, cycle_set = cycle_set, assignments = int_assignment, Kl_trans=Kl_trans, Ku_trans=Ku_trans, \
-					     order_fcn = order_fcn, integer = True, verbosity = 3)
+	# integer mode-counting synthesis
+	data_int = data_nonint.copy()
+	data_int['cycle_set'] = mc_sol_nonint['cycles']
+	data_int['assignments'] = int_assignment
+	data_int['lb_prefix'] = mc_lb_prefix
+	data_int['ub_prefix'] = mc_ub_prefix
+	data_int['ilp'] = True
 
-	pickle.dump((population, mc_sol_int), open(filename_data, 'wb') )
+	mc_sol_int = prefix_feasible( data_int )
 
-print "solution has transient guarantee [", min([ sum(mc_sol_int['states'][:len(G), t]) for t in range(T)]), max([ sum(mc_sol_int['states'][:len(G), t]) for t in range(T)]), "]"
+	print "int solution has prefix mc bounds ", prefix_maxmin(G, mc_sol_int['states'], mode)
+	print "int solution has suffix mc bounds ", suffix_maxmin(G, mc_sol_int['cycles'], mode, mc_sol_int['assignments'])
 
-print "solution has steady state guarantee", cycles_maxmin(G, mc_sol_int['cycles'], mode, mc_sol_int['assignments'])
+	pickle.dump((population, mc_sol_int), open(filename_controller, 'wb') )
+	print "saved solution to " + filename_controller
 
-############################################################################
-##################### Perform the simulation ###############################
-############################################################################
+#############################################
+########## Perform a simulation #############
+#############################################
 
-if os.path.isfile(filename_plotdata):
+if os.path.isfile(filename_simulation):
 	print "loading saved simulation"
-	xvec_disc, uvec_disc, xvec_cont, modecount_cont = pickle.load( open(filename_plotdata, 'rb') )
+	xvec_disc, uvec_disc, xvec_cont, modecount_cont = pickle.load( open(filename_simulation, 'rb') )
 else:
 	A,B = lin_syst(G, order_fcn)
 	controls = CycleControl(G, mc_sol_int, order_fcn)
@@ -222,53 +293,4 @@ else:
 
 		assert( abs(sum(xvec_disc[:, disc_t+1]) - 10000) < 1e-5)
 
-	pickle.dump((xvec_disc, uvec_disc, xvec_cont, modecount_cont), open(filename_plotdata, 'wb') )
-
-
-max_t = 23.6
-min_t = 21.4
-num_bin_x = 200
-tau = 0.05 
-step = (23.6-21.4)/num_bin_x
-bins = np.arange(min_t, max_t, step)
-tvec = np.arange(0,30,tau)
-
-if os.path.isfile(filename_hist):
-	print "loading histogram"
-	hist_vec = pickle.load(open(filename_hist, 'rb'))
-else:
-	hist_vec = []
-
-	for t in range(0, len(xvec_cont)):
-		print t
-		hist = np.zeros(len(bins))
-		for state_i in xvec_cont[t]:
-			bin_index = next(i for i in range(len(bins)) if bins[i] + step/2 >= state_i[0] )
-			hist[bin_index] += 1
-		hist_vec.append(hist)
-
-	hist_vec = np.array(hist_vec)
-
-	pickle.dump(hist_vec, open(filename_hist, 'wb'))
-
-columnwidth = 240.0/72.27
-
-width = columnwidth
-
-fig = plt.figure(figsize = (width,width/2))
-
-plt.rcParams['text.latex.preamble']=[r"\usepackage{lmodern}"]
-#Options
-params = {'text.usetex' : True,
-          'font.size' : 11,
-          'font.family' : 'lmodern',
-          'text.latex.unicode': True
-}
-
-plt.pcolormesh(tvec[range(0, len(tvec)/3-1)], bins, hist_vec[range(0, len(tvec)/3-1),:].transpose(), cmap = plt.cm.Blues)
-plt.ylim([min_t, max_t])
-plt.xlabel(r'$t$')
-plt.ylabel(r'$\theta$')
-plt.rcParams.update(params) 
-plt.tight_layout()
-plt.savefig('tcl_low_feas_density.pdf')
+	pickle.dump((xvec_disc, uvec_disc, xvec_cont, modecount_cont), open(filename_simulation, 'wb') )

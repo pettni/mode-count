@@ -5,9 +5,8 @@ import matplotlib.pyplot as plt
 tmin = 0
 tmax = 10
 tau = 0.05
-_, _, _, modecount_low = pickle.load( open('tcl_low_feas_plotdata_20_1_[3210, 3190]_10000.save', 'rb') )
-
-_, _, _, modecount_high = pickle.load( open('tcl_high_feas_plotdata_20_1_[3610, 3590]_10000.save', 'rb') )
+_, _, _, modecount_low  = pickle.load( open('tcl_low_feas_simulation_20_1_[3200, 3200, 2500, 4600]_10000.save', 'rb') )
+_, _, _, modecount_high = pickle.load( open('tcl_high_feas_simulation_20_1_[3600, 3600, 2500, 4600]_10000.save', 'rb') )
 
 tvec = np.arange(0., 10., 0.05)
 plt.plot(tvec, np.array(modecount_low)[:len(tvec)], linestyle='red')
@@ -43,4 +42,4 @@ plt.ylabel(r'mode-\verb+on+-count')
 plt.legend()
 plt.rcParams.update(params) 
 plt.tight_layout()
-plt.savefig('tcl_mc.pdf')
+plt.savefig('example_5.2_fig2.pdf')

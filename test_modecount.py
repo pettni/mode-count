@@ -14,12 +14,12 @@ class modecountTests(unittest.TestCase):
 		self.assertEquals(len(ab), 4)
 
 		c1 = ab.point_to_midx((0.2, 0.2))
-		self.assertEquals(ab.graph.node[c1]['lb'], (0.,0.))
-		self.assertEquals(ab.graph.node[c1]['ub'], (1.,1.))
+		self.assertEquals(ab.graph.node[c1]['lower_bounds'], (0.,0.))
+		self.assertEquals(ab.graph.node[c1]['upper_bounds'], (1.,1.))
 
 		c2 = ab.point_to_midx((0.2, -0.7))
-		self.assertEquals(ab.graph.node[c2]['lb'], (0.,-1))
-		self.assertEquals(ab.graph.node[c2]['ub'], (1,0))
+		self.assertEquals(ab.graph.node[c2]['lower_bounds'], (0.,-1))
+		self.assertEquals(ab.graph.node[c2]['upper_bounds'], (1,0))
 
 	def test_ordering(self):
 		ab = Abstraction([0, 0], [5, 4], 1, 1)

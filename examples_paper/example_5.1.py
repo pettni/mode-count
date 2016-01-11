@@ -52,7 +52,7 @@ forbidden_nodes = [ node for node, attr in G.nodes_iter(data=True) if np.all(np.
 
 # randomize an initial condition
 init = np.zeros(len(G))
-np.random.seed(1)
+np.random.seed(0)
 j = 0
 while j < 10000:
 	i = np.random.randint( len(G), size=1)
@@ -86,6 +86,6 @@ prob_data['order_function'] = order_fcn
 prob_data['forbidden_nodes'] = forbidden_nodes
 prob_data['ilp'] = True
 
-sol_data = prefix_suffix_feasible(prob_data)
+sol_data = prefix_suffix_feasible(prob_data, verbosity = 2)
 
 pickle.dump((G, sol_data), open('example_5.1.save', 'wb') )
