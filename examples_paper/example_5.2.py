@@ -38,7 +38,7 @@ vf_off = lambda theta : -a * ( theta - theta_a ) 			# tcl off
 beta_on = lambda r,s : r * np.exp(-s*a)
 beta_off = lambda r,s : r * np.exp(-s*a)
 
-target_mc = 'high'    # 'high' or 'low'
+target_mc = 'low'    # 'high' or 'low'
 
 ################################################
 ################################################
@@ -98,8 +98,6 @@ filename_controller = filename + "_controller_" + name_suffix
 # save simulation data
 filename_simulation = filename + "_simulation_" + name_suffix
 
-filename_hist = filename + "_hist_" + name_suffix
-
 ############################################################
 ############  Create a bunch of TCL's  #####################
 ############################################################
@@ -136,8 +134,8 @@ else:
 	print "computing abstraction"
 	print "abstraction will have ", np.product((np.array(ub)-np.array(lb))/eta), " states"
 	ab = Abstraction(lb, ub, eta, tau)
-	ab.add_mode(d_on)
-	ab.add_mode(d_off)
+	ab.add_mode(vf_on)
+	ab.add_mode(vf_off)
 
 	pickle.dump(ab, open(filename_abs,'wb') ) # save it!
 

@@ -31,6 +31,7 @@ python example_5.2.py    		  # Compute abstraction, control strategy, and do sim
 ```
 Plots are produced as follows:
 ```python
-python example_5.2_plot1.py 	  # Produces KDE plots (takes considerable time)
+python example_5.2_plot1.py	  # Produces histogram plots
+python example_5.2_plot1_kde.py	  # Produces KDE plots (takes considerable time)
 python example_5.2_plot2.py  	  # Produces time line plot
 ```
