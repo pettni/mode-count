@@ -9,7 +9,9 @@ Working Python environment, with
 * scipy
 * matplotlib (for visualization)
 * networkx
-* mosek with Mosek Fusion for Python (tested with version 7.1.0.40) 
+* One of the following ILP solvers
+	* [Mosek](https://mosek.com), also requires [cvxopt](http://cvxopt.org)
+	* [Gurobi](http://www.gurobi.com)
 
 ## Run an example
 ```

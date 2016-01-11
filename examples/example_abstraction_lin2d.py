@@ -72,12 +72,12 @@ while True:
 		break
 
 # Solve discrete mode synthesis problem
-pre_suf_sol = prefix_suffix_feasible(pre_suf_data)
+pre_suf_sol = prefix_suffix_feasible(pre_suf_data, verbosity=2)
 
 # simulate it on the connected subset of the graph!
 G = ab.graph
 strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
 anim = simulate(G, pre_suf_sol, ab.node_to_idx, strongly_conn_nodes)
-anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
+# anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
 
 plt.show()

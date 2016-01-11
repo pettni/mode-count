@@ -45,4 +45,4 @@ problem_data['forbidden_nodes'] = G.nodes_with_selfloops()
 problem_data['ilp'] = True
 
 # mode-counting synthesis
-solution_data = prefix_suffix_feasible(problem_data, verbosity = 1)
+solution_data = prefix_suffix_feasible(problem_data, verbosity = 2)
