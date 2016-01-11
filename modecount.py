@@ -461,11 +461,6 @@ def simulate(G, sol, order_fcn, nodelist = []):
 
 	# Plot initial set of nodes
 	node_size = 300 * np.ones(len(subgraph_indices))
-	for node in sol['forbidden_nodes']:
-		if node in subgraph.nodes():
-			node_size[subgraph.nodes().index(node)] = 600
-
-	# nx.draw_networkx_labels(subgraph, pos, ax=ax)
 	
 	nod = nx.draw_networkx_nodes(subgraph, pos, ax=ax, node_size = node_size )
 

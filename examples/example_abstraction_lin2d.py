@@ -1,15 +1,15 @@
 """
 Example illustrating abstracting a 2-mode switched system, and mode-counting synthesis on the abstraction graph
 """
-import sys
 
 import networkx as nx
 import matplotlib.pyplot as plt
 
 from numpy.linalg import norm
 from scipy.linalg import expm
-sys.path.append('../')
 
+import sys
+sys.path.append('../')
 from modecount import *
 
 # Define an abstraction
@@ -75,8 +75,9 @@ while True:
 pre_suf_sol = prefix_suffix_feasible(pre_suf_data)
 
 # simulate it on the connected subset of the graph!
-# strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
-# anim = simulate(G, mc_sol, order_fcn, strongly_conn_nodes)
-# anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
+G = ab.graph
+strongly_conn_nodes = G.subgraph(max(nx.strongly_connected_components(G), key=len))
+anim = simulate(G, pre_suf_sol, ab.node_to_idx, strongly_conn_nodes)
+anim.save('example_abstraction_lin2d_anim.mp4', fps=10)
 
 plt.show()

@@ -31,7 +31,7 @@ nx.draw_networkx_edges(H, pos, edgelist = edges(sol_data['cycles'][0]) , edge_co
 nx.draw_networkx_edges(H, pos, edgelist = edges(sol_data['cycles'][1]) , edge_color = 'green', style='solid', width=1.5)
 nx.draw_networkx_edges(H, pos, edgelist = edges(sol_data['cycles'][2]) , edge_color = 'blue', style='solid', width=1.5)
 nx.draw_networkx_edges(H, pos, edgelist = edges(sol_data['cycles'][3]) , edge_color = 'yellow', style='solid', width=1.5)
-nx.draw_networkx_edges(H, pos, edgelist = edges(sol_data['cycles'][4]) , edge_color = 'purple', style='solid', width=1.5)
+# nx.draw_networkx_edges(H, pos, edgelist = edges(sol_data['cycles'][4]) , edge_color = 'purple', style='solid', width=1.5)
 
 xmin = min([val[0] for val in pos.itervalues()]) - 0.1 * scalefac
 xmax = max([val[0] for val in pos.itervalues()]) + 0.1 * scalefac
