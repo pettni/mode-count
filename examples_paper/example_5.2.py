@@ -16,6 +16,7 @@ import sys
 
 sys.path.append('../')
 from modecount import *
+from random_cycle import random_cycle
 
 # TCL parameters
 Cth = 2.
@@ -38,7 +39,7 @@ vf_off = lambda theta : -a * ( theta - theta_a ) 			# tcl off
 beta_on = lambda r,s : r * np.exp(-s*a)
 beta_off = lambda r,s : r * np.exp(-s*a)
 
-target_mc = 'low'    # 'high' or 'low'
+target_mc = 'high'    # 'high' or 'low'
 
 ################################################
 ################################################
@@ -64,14 +65,14 @@ mode = 1		# mode to count (1 or 2)
 
 if target_mc == 'high':
 	mc_lb = 3600
-	mc_ub = 3600			# desired mode count over time
-	mc_lb_prefix = 2500
-	mc_ub_prefix = 4600		# desired mode count over time
+	mc_ub = 3600			# suffix mode count bounds
+	mc_lb_prefix = 3600
+	mc_ub_prefix = 4300		# prefix mode count bounds
 elif target_mc == 'low':
 	mc_lb = 3200
-	mc_ub = 3200			# desired mode count over time
+	mc_ub = 3200			# suffix mode count bounds
 	mc_lb_prefix = 2500
-	mc_ub_prefix = 4600		# desired mode count over time
+	mc_ub_prefix = 3200		# prefix mode count bounds
 
 # Abstraction parameters
 lb = [theta_r - delta]		# lower bounds
@@ -164,7 +165,7 @@ else:
 	cycle_set = []
 	c_quot_set = set([])
 	while len(cycle_set) < 100:
-		c = random_cycle(G, 5, 0.8)
+		c = random_cycle(G, [], 5, 0.8)
 		c_quot = cyclequot(G,c,mode)
 		if c_quot not in c_quot_set:
 			cycle_set.append(c)

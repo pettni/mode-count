@@ -15,15 +15,13 @@ tvec = np.arange(0,30,tau/10)
 for target in ['low', 'high']:
 
 	if target == 'low':
-		_, _, xvec_cont, _ = pickle.load( open('tcl_low_feas_simulation_20_1_[3200, 3200, 2500, 4600]_10000.save', 'rb') )
+		_, _, xvec_cont, _ = pickle.load( open('tcl_low_feas_simulation_20_1_[3200, 3200, 2500, 3200]_10000.save', 'rb') )
 	elif target == 'high':
-		_, _, xvec_cont, _ = pickle.load( open('tcl_high_feas_simulation_20_1_[3600, 3600, 2500, 4600]_10000.save', 'rb') )
-
+		_, _, xvec_cont, _ = pickle.load( open('tcl_high_feas_simulation_20_1_[3600, 3600, 3600, 4300]_10000.save', 'rb') )
 
 	hist_vec = []
 
 	for t in range(0, len(xvec_cont)):
-		print t
 		hist = np.zeros(len(bins))
 		for state_i in xvec_cont[t]:
 			bin_index = next(i for i in range(len(bins)) if bins[i] + step/2 >= state_i[0] )
@@ -32,10 +30,8 @@ for target in ['low', 'high']:
 
 	hist_vec = np.array(hist_vec)
 
-
-	#Direct input 
-	plt.rcParams['text.latex.preamble']=[r"\usepackage{lmodern}"]
 	#Options
+	plt.rcParams['text.latex.preamble']=[r"\usepackage{lmodern}"]
 	params = {'text.usetex' : True,
 	          'font.size' : 11,
 	          'font.family' : 'lmodern',

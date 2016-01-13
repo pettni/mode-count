@@ -2,19 +2,20 @@ import cPickle as pickle
 
 import networkx as nx
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Circle
 
-unsafe_sq = 0.15
-margin = 0.15
-numcycles = 5
+unsafe_radius = 0.15
+margin = 0.1
 
-G, sol_data = pickle.load(open('example_5.1.save', 'rb') )
+G, sol_data = pickle.load(open('example_nonlinear.save', 'rb') )
 
 H = max(nx.strongly_connected_component_subgraphs(G), key=len)
 
+numcycles = len(sol_data['cycles'])
+
 pos = {}
 for node, attr in H.nodes_iter(data=True):
-	pos[node] = attr['mid']
+	pos[node] = scalefac*attr['mid']
 
 def edges(cycle):
 	return [(cycle[i], cycle[(i+1) % len(cycle)]) for i in range(len(cycle))]
@@ -32,11 +33,11 @@ ymax = max([val[1] for val in pos.itervalues()]) + 0.1
 
 currentAxis = plt.gca()
 
-currentAxis.add_patch(Rectangle( (-unsafe_sq, -unsafe_sq), 2*unsafe_sq, 2*unsafe_sq, color='red', alpha=0.3) )
-currentAxis.add_patch(Rectangle( (-(unsafe_sq+margin), -(unsafe_sq+margin)), 2*(unsafe_sq+margin), 2*(unsafe_sq+margin), color='red', alpha=0.3) )
+currentAxis.add_patch(Circle( (0, 0), radius=unsafe_radius, color='red', alpha=0.3) )
+currentAxis.add_patch(Circle( (0, 0), radius=(unsafe_radius + margin ), color='red', alpha=0.3) )
 
 #Options
 plt.axis('off')
 plt.xlim([xmin, xmax])
 plt.ylim([ymin, ymax])
-plt.savefig('example_5.1_fig.pdf', format='pdf')
+plt.savefig('example_nonlinear_fig.pdf', format='pdf')

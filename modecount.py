@@ -26,7 +26,6 @@ import numpy as np
 
 import scipy.integrate
 import scipy.sparse
-import random
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -37,7 +36,6 @@ import itertools
 
 import time
 
-from random_cycle import random_cycle
 from optimization_wrappers import solve_mip, solve_lp
 
 np.set_printoptions(precision=4, suppress=True)

@@ -94,8 +94,8 @@ def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
    	sol = {}
    	if m.status == gurobipy.GRB.status.OPTIMAL:
 	   	sol['x'] = np.array([v.x for v in x])
+	   	sol['primal objective'] = m.objVal
    	sol['status'] = m.status
-   	sol['primal objective'] = m.objVal
 
    	return sol
 
@@ -105,7 +105,7 @@ def solve_lp(c,Aiq,biq,Aeq,beq, solver = default_solver):
                 solver = default_solver
         
         if solver == 'gurobi':
-                return _solve_gurobi(c,Aiq,biq,Aeq,beq,[])
+			return _solve_gurobi(c,Aiq,biq,Aeq,beq,[])
         elif solver == 'mosek':
 	        return solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
 

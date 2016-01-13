@@ -13,6 +13,7 @@ import cPickle as pickle
 sys.path.append('../')
 
 from modecount import *
+from random_cycle import random_cycle
 
 # Define an abstraction
 data = {}
@@ -65,7 +66,7 @@ while j < 10000:
 cycle_set = []
 c_quot_set = set([])
 while len(cycle_set) < 100:
-	c = random_cycle(G, 5, 0.8)
+	c = random_cycle(G, forbidden_nodes, 5, 0.8)
 	c_quot = cyclequot(G,c,1)
 	if c_quot not in c_quot_set:
 		cycle_set.append(c)

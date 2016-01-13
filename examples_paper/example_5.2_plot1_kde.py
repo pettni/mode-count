@@ -17,9 +17,9 @@ width = 240.0/72.27
 for target in ['low', 'high']:
 
 	if target == 'low':
-		_, _, xvec_cont, _ = pickle.load( open('tcl_low_feas_simulation_20_1_[3200, 3200, 2500, 4600]_10000.save', 'rb') )
+		_, _, xvec_cont, _ = pickle.load( open('tcl_low_feas_simulation_20_1_[3200, 3200, 2500, 3200]_10000.save', 'rb') )
 	elif target == 'high':
-		_, _, xvec_cont, _ = pickle.load( open('tcl_high_feas_simulation_20_1_[3600, 3600, 2500, 4600]_10000.save', 'rb') )
+		_, _, xvec_cont, _ = pickle.load( open('tcl_high_feas_simulation_20_1_[3600, 3600, 3600, 4300]_10000.save', 'rb') )
 
 
 	xvec_cont = np.array(xvec_cont).flatten()
@@ -32,8 +32,8 @@ for target in ['low', 'high']:
 
 	fig = plt.figure(figsize = (width,width/2))
 
-	plt.rcParams['text.latex.preamble']=[r"\usepackage{lmodern}"]
 	#Options
+	plt.rcParams['text.latex.preamble']=[r"\usepackage{lmodern}"]
 	params = {'text.usetex' : True,
 	          'font.size' : 11,
 	          'font.family' : 'lmodern',

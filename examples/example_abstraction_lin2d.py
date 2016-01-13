@@ -63,13 +63,7 @@ pre_suf_data['ilp'] = True
 
 pre_suf_data['horizon'] = 10 			 	# prefix horizon
 
-pre_suf_data['cycle_set'] = [] 				# set of cycles in pre_suf_data['graph']
-gen = nx.simple_cycles(ab.graph)
-while True: 
-	try:
-		pre_suf_data['cycle_set'].append(next(gen))
-	except:
-		break
+pre_suf_data['cycle_set'] = list(nx.simple_cycles(ab.graph))
 
 # Solve discrete mode synthesis problem
 pre_suf_sol = prefix_suffix_feasible(pre_suf_data, verbosity=2)
