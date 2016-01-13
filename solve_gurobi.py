@@ -1,18 +1,28 @@
 import numpy as np
 import scipy.sparse
 
-from cvxopt import matrix, spmatrix, solvers
-import cvxopt.msk as msk
+default_solver = 'gurobi'
 
-import mosek
+try:
+	from gurobipy import *
+except Exception, e:
+	print "warning: gurobi not found"
+	default_solver = 'mosek'
 
-from gurobipy import *
+try:
+	from cvxopt import matrix, spmatrix, solvers
+	import cvxopt.msk as msk
+	import mosek
+	solvers.options['show_progress'] = False
+	solvers.options['mosek'] = {mosek.iparam.log: 0} 
+except Exception, e:
+	print "warning: cvxopt and or mosek not found"
+	default_solver = 'gurobi'
+
 
 TIME_LIMIT = 10 * 3600
 GUROBI_OUTPUT = 0
 
-solvers.options['show_progress'] = False
-solvers.options['mosek'] = {mosek.iparam.log: 0} 
 
 
 def _solve_mosek(c,Aiq,biq,Aeq,beq,J):
@@ -88,7 +98,7 @@ def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
 def solve_lp(c,Aiq,biq,Aeq,beq):
 	return solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
 
-def solve_mip(c,Aiq,biq,Aeq,beq, J = None, solver='gurobi'):
+def solve_mip(c,Aiq,biq,Aeq,beq, J = None, solver=default_solver):
 
 	assert(Aiq.shape[1] == Aeq.shape[1])
 	assert(Aiq.shape[0] == len(biq))

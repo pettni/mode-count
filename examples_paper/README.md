@@ -6,6 +6,7 @@ Versions of relevant software used for examples in the paper
  * Python v. 2.7.10
  * [Gurobi](http://www.gurobi.com) v. 6.5.0
  * numpy v. 1.10.1
+ * scipy v. 1.16.1
  * networkx v. 1.10
 
 ## Example 5.1: Numerical

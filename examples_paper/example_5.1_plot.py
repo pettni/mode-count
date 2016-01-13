@@ -47,4 +47,4 @@ currentAxis.add_patch(Rectangle( (-scalefac*0.3, -scalefac*0.3), scalefac*0.6, s
 plt.axis('off')
 plt.xlim([xmin, xmax])
 plt.ylim([ymin, ymax])
-plt.savefig('example_5.1_fig2.pdf', format='pdf')
+plt.savefig('example_5.1_fig.pdf', format='pdf')

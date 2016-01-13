@@ -60,5 +60,6 @@ target/
 *.mp4
 *.save
 
-#
-*.pdf
+# pdf outputs from examples
+
+example*/*.pdf

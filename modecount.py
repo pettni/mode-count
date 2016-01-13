@@ -191,8 +191,16 @@ def lin_syst(G, order_fcn = None):
 
 	ordering = sorted(G.nodes_iter(), key = order_fcn)
 
-	T = nx.adjacency_matrix(G, nodelist = ordering, weight='mode').transpose()
-	T_list = [ T == mode for mode in range(1, _maxmode(G)+1) ]
+	adj_data = nx.to_dict_of_dicts(G)
+	
+	T_list = []
+	for mode in range(1, _maxmode(G)+1):
+		data = np.array([(1, order_fcn(node2), order_fcn(node1)) \
+								for (node1, node1_out) in adj_data.iteritems()  \
+								for node2 in node1_out \
+								if node1_out[node2]['mode'] == mode])
+		T_mode = scipy.sparse.coo_matrix( (data[:,0], (data[:,1], data[:,2])), shape=(len(G), len(G)) )
+		T_list.append(T_mode)
 
 	A = scipy.sparse.block_diag(tuple(T_list), dtype=np.int8)	
 	B = scipy.sparse.bmat([ [Ti for i in range(len(T_list))] for Ti in T_list ]) - 2*A
