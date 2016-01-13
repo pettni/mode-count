@@ -1,32 +1,36 @@
 import numpy as np
 import scipy.sparse
 
+SOLVER_OUTPUT = False
 default_solver = 'gurobi'
 
+# Try to import gurobi
 try:
-	from gurobipy import *
+	from gurobipy import * 
+        TIME_LIMIT = 10 * 3600
+        if SOLVER_OUTPUT:
+                GUROBI_OUTPUT = 1
+        else:
+                GUROBI_OUTPUT = 0
 except Exception, e:
 	print "warning: gurobi not found"
 	default_solver = 'mosek'
 
+# Try to import mosek/cvxopt
 try:
 	from cvxopt import matrix, spmatrix, solvers
 	import cvxopt.msk as msk
 	import mosek
-	solvers.options['show_progress'] = False
-	solvers.options['mosek'] = {mosek.iparam.log: 0} 
+
+        if not SOLVER_OUTPUT:
+	        solvers.options['show_progress'] = False
+	        solvers.options['mosek'] = {mosek.iparam.log: 0} 
 except Exception, e:
 	print "warning: cvxopt and or mosek not found"
 	default_solver = 'gurobi'
 
-
-TIME_LIMIT = 10 * 3600
-GUROBI_OUTPUT = 0
-
-
-
 def _solve_mosek(c,Aiq,biq,Aeq,beq,J):
-	solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), set(range(N_u)))
+	solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), J)
 	sol = {}
 	sol['x'] = x_out
 	sol['status'] = solsta
@@ -95,11 +99,21 @@ def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
 
    	return sol
 
-def solve_lp(c,Aiq,biq,Aeq,beq):
-	return solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
+def solve_lp(c,Aiq,biq,Aeq,beq, solver = default_solver):
 
-def solve_mip(c,Aiq,biq,Aeq,beq, J = None, solver=default_solver):
+        if solver == None:
+                solver = default_solver
+        
+        if solver == 'gurobi':
+                return _solve_gurobi(c,Aiq,biq,Aeq,beq,[])
+        elif solver == 'mosek':
+	        return solvers.lp(matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), 'mosek')
 
+def solve_mip(c,Aiq,biq,Aeq,beq, J = None, solver = default_solver):
+
+        if solver == None:
+                solver = default_solver
+        
 	assert(Aiq.shape[1] == Aeq.shape[1])
 	assert(Aiq.shape[0] == len(biq))
 	assert(Aeq.shape[0] == len(beq))

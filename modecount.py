@@ -38,7 +38,7 @@ import itertools
 import time
 
 from random_cycle import random_cycle
-from solve_gurobi import solve_mip, solve_lp
+from optimization_wrappers import solve_mip, solve_lp
 
 np.set_printoptions(precision=4, suppress=True)
 
@@ -147,7 +147,7 @@ class CycleControl():
 		self.A, self.B = lin_syst(G, order_fcn)
 		self.stacked_e = _stacked_eye(G)
 
-	def get_u(self, t, state):
+	def get_u(self, t, state, solver=None):
 
 		if t < self.u_arr.shape[1]:
 			return self.u_arr[:,t]
@@ -165,7 +165,7 @@ class CycleControl():
 		biq = np.hstack([np.zeros(self.B.shape[1]), state])
 
 		c = np.zeros(self.B.shape[1])
-		sol = solve_lp(c, Aiq, biq, Aeq, beq)
+		sol = solve_lp(c, Aiq, biq, Aeq, beq, solver=solver)
 		return np.array(sol['x']).flatten()
 
 def verify_bisim(beta, tau, eta, eps):
@@ -207,7 +207,7 @@ def lin_syst(G, order_fcn = None):
 
 	return A,B
 
-def prefix_feasible(problem_data, verbosity = 1):
+def prefix_feasible(problem_data, verbosity = 1, solver=None):
 	'''
     Define and solve the prefix part of a mode-counting 
     synthesis problem (requires a given suffix part)
@@ -240,7 +240,6 @@ def prefix_feasible(problem_data, verbosity = 1):
     * ``'cycles'``         : suffix cycles (same as input)
     * ``'assignments'``    : suffix assignments (same as input)
 	'''
-
 	G, T, N, ilp, order_fcn, forbidden_nodes = _extract_arguments(problem_data)
 
 	# variables: u[0], ..., u[T-1], x[0], ..., x[T]
@@ -278,8 +277,8 @@ def prefix_feasible(problem_data, verbosity = 1):
 
 	if verbosity >= 1: print "solving (I)LP..."; solve_start = time.time()
 	
-	if ilp: lp_sln = solve_mip(np.zeros(N_tot), Aiq, biq, Aeq, beq, set(range(N_u)))
-	else: lp_sln = solve_lp(np.zeros(N_tot), Aiq, biq, Aeq, beq)
+	if ilp: lp_sln = solve_mip(np.zeros(N_tot), Aiq, biq, Aeq, beq, set(range(N_u)), solver=solver)
+	else: lp_sln = solve_lp(np.zeros(N_tot), Aiq, biq, Aeq, beq, solver=solver)
 	
 	if verbosity >= 1: print "It took ", time.time() - solve_start, " to solve (I)LP"
 
@@ -292,7 +291,7 @@ def prefix_feasible(problem_data, verbosity = 1):
 
 	return sol
 
-def prefix_suffix_feasible(problem_data, verbosity = 1):
+def prefix_suffix_feasible(problem_data, verbosity = 1, solver=None):
 	'''
     Define and solve a mode-counting synthesis problem
     with a prefix-suffix strategy.
@@ -403,9 +402,9 @@ def prefix_suffix_feasible(problem_data, verbosity = 1):
 	if verbosity >= 1: print "solving (I)LP..."; solve_start = time.time()
 	
 	if ilp:
-		lp_sln = solve_mip(np.zeros(N_tot), Aiq, biq, Aeq, beq, set(range(N_u)))
+		lp_sln = solve_mip(np.zeros(N_tot), Aiq, biq, Aeq, beq, set(range(N_u)), solver=solver)
 	else:
-		lp_sln = solve_lp(np.zeros(N_tot), Aiq, biq, Aeq, beq)
+		lp_sln = solve_lp(np.zeros(N_tot), Aiq, biq, Aeq, beq, solver=solver)
 	
 	if verbosity >= 1: print "It took ", time.time() - solve_start, " to solve (I)LP"
 

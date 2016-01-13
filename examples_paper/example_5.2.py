@@ -150,6 +150,8 @@ print "Graph diameter: ", nx.diameter(G)
 if os.path.isfile(filename_controller):
 	print "loading saved population and controller"
 	population, mc_sol_int = pickle.load( open(filename_controller,'rb')  )
+	print "int solution has prefix mc bounds ", prefix_maxmin(G, mc_sol_int['states'], mode)
+	print "int solution has suffix mc bounds ", suffix_maxmin(G, mc_sol_int['cycles'], mode, mc_sol_int['assignments'])        
 else:
 
 	population = [TCL(22 + 1 * np.random.rand(1)) for i in range(pop_size)]
@@ -188,7 +190,7 @@ else:
 	data_nonint['order_function'] = order_fcn
 	data_nonint['ilp'] = False
 
-	mc_sol_nonint = prefix_suffix_feasible( data_nonint )
+	mc_sol_nonint = prefix_suffix_feasible( data_nonint, solver='gurobi' )
 
 	print "nonint solution has prefix mc bounds ", prefix_maxmin(G, mc_sol_nonint['states'], mode)
 	print "nonint solution has suffix mc bounds ", suffix_maxmin(G, mc_sol_nonint['cycles'], mode, mc_sol_nonint['assignments'])
@@ -206,7 +208,7 @@ else:
 	data_int['ub_prefix'] = mc_ub_prefix
 	data_int['ilp'] = True
 
-	mc_sol_int = prefix_feasible( data_int )
+	mc_sol_int = prefix_feasible( data_int , solver='gurobi')
 
 	print "int solution has prefix mc bounds ", prefix_maxmin(G, mc_sol_int['states'], mode)
 	print "int solution has suffix mc bounds ", suffix_maxmin(G, mc_sol_int['cycles'], mode, mc_sol_int['assignments'])
@@ -247,7 +249,7 @@ else:
 	for disc_t in range(disc_tmax):
 		print "TIME: ", disc_t, " out of ", disc_tmax
 
-		u = controls.get_u(disc_t, xvec_disc[:,disc_t])
+		u = controls.get_u(disc_t, xvec_disc[:,disc_t], solver='gurobi')
 
 		flows = xvec_disc[:,disc_t] - u + scipy.sparse.bmat( [ [None, scipy.sparse.identity(len(G))], [scipy.sparse.identity(len(G)), None] ] ).dot( u )
 

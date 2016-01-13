@@ -86,6 +86,6 @@ prob_data['order_function'] = order_fcn
 prob_data['forbidden_nodes'] = forbidden_nodes
 prob_data['ilp'] = True
 
-sol_data = prefix_suffix_feasible(prob_data, verbosity = 2)
+sol_data = prefix_suffix_feasible(prob_data, verbosity = 2, solver='gurobi')
 
 pickle.dump((G, sol_data), open('example_5.1.save', 'wb') )
