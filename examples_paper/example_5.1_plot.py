@@ -6,7 +6,7 @@ from matplotlib.patches import Rectangle
 
 unsafe_sq = 0.15
 margin = 0.15
-numcycles = 5
+numcycles = len(sol_data['cycles'])
 
 G, sol_data = pickle.load(open('example_5.1.save', 'rb') )
 
