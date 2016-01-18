@@ -26,9 +26,9 @@ Example for an aggregation of one-dimensional switched systems that is solved fo
 2. Round suffix solution to integer
 3. Solve prefix ILP to find matching prefix
 
-The desired mode count is entered in ```example_5.2.py``` on line 41. Before producing plots, the following script needs to be executed for both ```high``` and ```low``` desired mode counts.
 ```python
-python example_5.2.py    		  # Compute abstraction, control strategy, and do simulation
+python example_5.2_high.py    		  # Compute abstraction, control strategy, and do simulation
+python example_5.2_low.py    		  # Compute abstraction, control strategy, and do simulation
 ```
 Plots are produced as follows:
 ```python
@@ -43,3 +43,8 @@ The figures included in the paper were generated on an iMac running OS X 10.11.2
 
 We have observed that the computed solutions may differ between computers. Since we solve a feasability optimization problem, there are in general many solutions, and parameters beyond our control seem to affect which feasible solution that is first found on a particular system. However, the different solutions all satisfy the desired properties.
 
+One-liners that produces all figures in the paper:
+
+```python 
+python example_5.1.py; python example_5.1_plot.py;  python example_5.2_high.py; python example_5.2_low.py; python example_5.2_plot1_kde.py; python example_5.2_plot2.py
+```
