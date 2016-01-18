@@ -34,10 +34,6 @@ python example_abstraction_lin2d.py
 python -m unittest discover
 ```
 
-## Further documentation
+## Documentation
 
-[See the sphinx documentation](doc/documentation.rst) (uncompiled). To compile the documentation, go to ```doc/``` and run
-```
-make html
-```
-Then open ```doc/_build/html/``` in a web browser.
+[See the sphinx documentation](doc/html).

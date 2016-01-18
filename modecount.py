@@ -807,20 +807,16 @@ def _cycle_indices(G, ci, order_fcn = None):
 	return scipy.sparse.coo_matrix((vals, (row_idx, col_idx)), shape = (len(G), len(ci)) )
 
 def _stateind(G, node, mode, order_fcn = None):
-	'''
-	For a given 'node' and 'mode' in the graph 'G', compute the index
+	'''For a given 'node' and 'mode' in the graph 'G', compute the index
 	of the node-mode state in the corresponding linear system, using
-	ordering given by order_fcn
-	'''
+	ordering given by order_fcn'''
+
 	if order_fcn == None:
-		nodelist = G.nodes()
-		order_fcn = lambda v : nodelist.index(v)
+		order_fcn = lambda v : G.nodes().index(v)
 	return (mode - 1) * len(G) + order_fcn(node)
 
 def _cycle_matrix(G, cycle, mode):
-	'''
-	Comput a square matrix with rows given by _cycle_rows
-	'''
+	'''Compute a square matrix with rows given by _cycle_rows'''
 	return [row for row in _cycle_rows(G, cycle, mode)]
 
 def _cycle_rows(G, C, mode):
@@ -838,9 +834,7 @@ def _cycle_rows(G, C, mode):
 		d.rotate(-1)
 
 def _maxmode(G):
-	'''
-	For a given graph 'G', find the largest mode integer.
-	'''
+	'''For a given graph 'G', find the largest mode integer.'''
 	return max([d['mode'] for (u,v,d) in  G.edges(data=True)])
 
 ################################################################
@@ -848,10 +842,9 @@ def _maxmode(G):
 ################################################################
 
 def casc_round(list):
-	'''
-		Round entries in list while preserving total sum:
-		i_n = round(f_0 + ... + f_n) - (i_0 + ... + i_n-1)
-	'''
+	'''Round entries in list while preserving total sum:
+	   i_n = round(f_0 + ... + f_n) - (i_0 + ... + i_n-1)'''
+
 	fp_total = 0.
 	int_total = 0
 
@@ -865,11 +858,10 @@ def casc_round(list):
 	return ret
 
 def make_integer(assignments):
-	'''
-	Round assignments in 'assignments' using cascade rounding s.t.
+	'''Round assignments in 'assignments' using cascade rounding s.t.
 	 - sum of all assignments is preserved
-	 - every assignment is integral
-	'''
+	 - every assignment is integral'''
+
 	ass_sums = [sum(a) for a in assignments]
 	rounded_sums = casc_round(ass_sums)
 
@@ -881,11 +873,9 @@ def make_integer(assignments):
 	return [casc_round(ass) for ass in assignments]
 
 def make_avg_integer(assignments):
-	'''
-	Round assignments in 'assignments' by first constructing average assignments s.t.
-	 - sum of all assignments is preserved
-	 - every assignment is integral
-	'''
+	'''Round assignments in 'assignments' by first constructing average assignments 
+	and then cascade rounding'''
+
 	ass_sums = [sum(a) for a in assignments]			# sum of assignments
 	rounded_sums = casc_round(ass_sums) 				# round assignment sums to integers
 
