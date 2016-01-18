@@ -36,4 +36,4 @@ python -m unittest discover
 
 ## Documentation
 
-[See the sphinx documentation](doc/html).
+[See the sphinx documentation](http://web.eecs.umich.edu/~pettni/mc_doc/).
