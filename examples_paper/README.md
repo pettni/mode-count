@@ -41,7 +41,7 @@ python example_5.2_plot2.py  	  # Produces time line plot
 
 The figures included in the paper were generated on an iMac running OS X 10.11.2. The software has been successfully tested also in Linux environments. 
 
-We have observed that the computed solutions may differ between computers. Since we solve a feasability optimization problem, there are in general many solutions, and parameters beyond our control seem to affect which feasible solution that is first found on a particular system. However, the different solutions all satisfy the desired properties.
+We have observed that the computed solutions may differ between computers. Since we solve a feasability optimization problem, there are in general many solutions, and parameters beyond our control seem to affect which feasible solution that is found first on any given system. However, the different solutions all satisfy the desired properties.
 
 One-liner that produces all figures in the paper:
 
