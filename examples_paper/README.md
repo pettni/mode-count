@@ -2,6 +2,8 @@
 
 The following examples appeared in *Petter Nilsson and Necmiye Ozay, Control synthesis for large collections of systems with mode-counting constraints, in Proceedings of the International Conference on Hybrid Systems: Computation and Control, 2016*. Scripts to produce the plots in the paper are provided.
 
+The figures included in the paper were generated on an iMac running OS X 10.11.2. The software has been successfully tested also in Linux environments. 
+
 Versions of relevant software used for examples in the paper
  * Python v. 2.7.10
  * [Gurobi](http://www.gurobi.com) v. 6.5.0
@@ -38,8 +40,6 @@ python example_5.2_plot2.py  	  # Produces time line plot
 ```
 
 # Repeatability evaluation comments
-
-The figures included in the paper were generated on an iMac running OS X 10.11.2. The software has been successfully tested also in Linux environments. 
 
 We have observed that the computed solutions may differ between computers. Since we solve a feasability optimization problem, there are in general many solutions, and parameters beyond our control seem to affect which feasible solution that is found first on any given system. However, the different solutions all satisfy the desired properties and are thus valid solutions.
 
