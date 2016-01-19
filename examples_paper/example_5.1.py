@@ -15,12 +15,14 @@ sys.path.append('../')
 from modecount import *
 from random_cycle import random_cycle
 
-# Define an abstraction
-data = {}
+# unsafe set half side
+unsafe_x = 0.3
+unsafe_y = 0.2
+
 # Define a vector fields
-vf1 = lambda x : [-(x[0]-1.0) + x[1], -(x[0]-1.0) - x[1]]
-vf2 = lambda x : [-(x[0]+1.0) + x[1], -(x[0]+1.0) - x[1]]
-              
+vf1 = lambda x : [-(x[0]-1.0) + x[1], -(x[0]-1.0) - x[1] - x[1]**3]
+vf2 = lambda x : [-(x[0]+1.0) + x[1], -(x[0]+1.0) - x[1] - x[1]**3]
+ 
 # Define a KL function beta(r,s) s.t. || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
 kl1 = lambda r,s : r * norm( expm(s*np.array([[-1,  1], [-1, -1]])) , np.inf)
 kl2 = lambda r,s : r * norm( expm(s*np.array([[-1, -1], [ 1, -1]])) , np.inf)
@@ -32,10 +34,12 @@ eta = 0.05		 # space discretization
  
 tau = 0.5		 # time discretization
 
+epsilon = 0.15
+
 # Verify that abstraction is 0.15-approximate bisimulation
 # with respect to both KL functions
-assert(verify_bisim( kl1, tau, eta, 0.15 ))
-assert(verify_bisim( kl2, tau, eta, 0.15 ))
+assert(verify_bisim( kl1, tau, eta, epsilon ))
+assert(verify_bisim( kl2, tau, eta, epsilon ))
 
 # Initiate abstraction
 ab = Abstraction(lb, ub, eta, tau)
@@ -49,7 +53,7 @@ print "abstraction has ", len(G), " states"
 
 # order fcn def
 order_fcn = ab.node_to_idx
-forbidden_nodes = [ node for node, attr in G.nodes_iter(data=True) if np.all(np.abs(attr['mid']) < 0.3) ]
+forbidden_nodes = [ node for node, attr in G.nodes_iter(data=True) if np.all( np.abs(attr['mid']) < np.array([unsafe_x, unsafe_y]) + epsilon) ]
 
 # randomize an initial condition
 init = np.zeros(len(G))
@@ -78,8 +82,8 @@ prob_data['graph'] = ab.graph
 prob_data['init'] = init
 prob_data['horizon'] = 10
 prob_data['mode'] = 1
-prob_data['lb_suffix'] = 7000
-prob_data['ub_suffix'] = 7000
+prob_data['lb_suffix'] = 6750
+prob_data['ub_suffix'] = 6750
 
 prob_data['cycle_set'] = cycle_set
 
