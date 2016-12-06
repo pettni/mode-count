@@ -102,32 +102,15 @@ class SingleCountingProblem(object):
             (vals, (row_idx, col_idx)), shape=(len(C), len(C))
         )
 
-    def solve_prefix_suffix(self, init, horizon, cycle_set):
-        """Solve counting problem given an initial state, a horizon,
-        and a set of (augmented) cycles"""
-
-        # Todo:
-        #   - forbid state-mode combinations that don't exist in graph
-        #   - use native positive variables
-        #   - prune graph to find invariant set
-        #
-        T = horizon
+    def generate_prefix_dyn_cstr(self, init, T):
+        """Generate (in)equalities for prefix dynamics"""
         K = len(self.G)
         M = self.M
         L = len(self.constraints)
-        J = len(cycle_set)
 
-        # variables: u[0], ..., u[T-1], x[1], ..., x[T], a[0], ..., a[C-1]
+        # variables: u[0], ..., u[T-1], x[1], ..., x[T]
         N_u = T * K * M   # input vars
         N_x = T * K   # state vars
-        N_cycle_tot = sum([len(C) for C in cycle_set])  # cycle vars
-        N_bound = L * J    # bound vars
-
-        N_tot = N_u + N_x + N_cycle_tot + N_bound
-
-        ########################
-        # Dynamics constraints #
-        ########################
 
         # Obtain system matrix
         B = self.system_matrix()
@@ -154,7 +137,7 @@ class SingleCountingProblem(object):
         b_eq = np.hstack([b_dyn1, b_dyn2])
 
         # Forbid non-existent modes
-        # len(ban_idx) inequalities
+        # len(ban_idx) equalities
         ban_idx = [self.order_fcn(v) + m * K
                    for v in self.G.nodes_iter()
                    for m in range(M)
@@ -172,9 +155,19 @@ class SingleCountingProblem(object):
         A_iq = sp.bmat([[-sp.identity(N_u), sp.coo_matrix((N_u, N_x))]])
         b_iq = np.zeros(N_u)
 
-        ###############################
-        # Prefix counting constraints #
-        ###############################
+        return A_iq, b_iq, A_eq, b_eq
+
+    def generate_prefix_counting_cstr(self, T):
+        """Generate T * L inequalities for prefix counting constraints"""
+        K = len(self.G)
+        M = self.M
+
+        # variables: u[0], ..., u[T-1], x[1], ..., x[T]
+        N_u = T * K * M   # input vars
+        N_x = T * K   # state vars
+
+        A_iq = sp.coo_matrix((0, N_u + N_x))
+        b_iq = np.array([])
 
         for X, R in self.constraints:
             # T inequalities for each l
@@ -190,17 +183,66 @@ class SingleCountingProblem(object):
             )
             A_iq = _sparse_vstack(A_iq, sp.block_diag((A_pref_cc,) * T), 0)
             b_iq = np.hstack([b_iq, R * np.ones(T)])
+        return A_iq, b_iq
 
-        ###############################
-        # Suffix counting constraints #
-        ###############################
+    def generate_prefix_suffix_cstr(self, T, cycle_set):
+        """Generate K equalities that connect prefix and suffix"""
+        K = self.K
+        M = self.M
 
-        # Add space in matrices
-        N_iq = T * K * M + L * T
-        N_eq = 2 * T * K + T * len(ban_idx)
+        N_u = T * K * M
 
-        A_iq = sp.bmat([[A_iq, sp.coo_matrix((N_iq, N_cycle_tot + N_bound))]])
-        A_eq = sp.bmat([[A_eq, sp.coo_matrix((N_eq, N_cycle_tot + N_bound))]])
+        Psi_mats = [self.cycle_indices(C) for C in cycle_set]
+        A_eq_xT = sp.identity(K)
+        A_eq_cycle = scipy.sparse.bmat([Psi_mats])
+
+        A_eq = scipy.sparse.bmat(
+            [[sp.coo_matrix((K, N_u + K * (T - 1))), -A_eq_xT, A_eq_cycle]]
+        )
+        b_eq = np.zeros(K)
+
+        return A_eq, b_eq
+
+    def solve_prefix_suffix(self, init, T, cycle_set):
+        """Solve counting problem given an initial state, a horizon T,
+        and a set of (augmented) cycles"""
+
+        # Todo:
+        #   - use native positive variables
+        #   - prune graph to find invariant set
+
+        K = len(self.G)
+        M = self.M
+        L = len(self.constraints)
+        J = len(cycle_set)
+
+        # variables: u[0], ..., u[T-1], x[1], ..., x[T], a[0], ..., a[C-1]
+        N_u = T * K * M   # input vars
+        N_x = T * K   # state vars
+        N_cycle_tot = sum([len(C) for C in cycle_set])  # cycle vars
+        N_bound = L * J    # bound vars
+
+        N_tot = N_u + N_x + N_cycle_tot + N_bound
+
+        A_iq1, b_iq1, A_eq, b_eq = self.generate_prefix_dyn_cstr(init, T)
+        A_iq2, b_iq2 = self.generate_prefix_counting_cstr(T)
+
+        A_iq = sp.bmat([[A_iq1], [A_iq2]])
+        b_iq = np.hstack([b_iq1, b_iq2])
+
+        # Add space in matrices for assignment vars
+        A_iq = sp.bmat([[A_iq, sp.coo_matrix((A_iq.shape[0], N_cycle_tot))]])
+        A_eq = sp.bmat([[A_eq, sp.coo_matrix((A_eq.shape[0], N_cycle_tot))]])
+
+        A_eq_s, b_eq_s = self.generate_prefix_suffix_cstr(T, cycle_set)
+
+        A_eq = sp.bmat([[A_eq], [A_eq_s]])
+        b_eq = np.hstack([b_eq, b_eq_s])
+
+
+        # Add space in matrices for slack vars
+        A_iq = sp.bmat([[A_iq, sp.coo_matrix((A_iq.shape[0], N_bound))]])
+        A_eq = sp.bmat([[A_eq, sp.coo_matrix((A_eq.shape[0], N_bound))]])
 
         # (47b)
         for l in range(L):
@@ -225,21 +267,6 @@ class SingleCountingProblem(object):
         # Assignments positive
         A_iq = _sparse_vstack(A_iq, -sp.identity(N_cycle_tot), N_x + N_u)
         b_iq = np.hstack([b_iq, np.zeros(N_cycle_tot)])
-
-        ############################
-        # Prefix-suffix connection #
-        ############################
-
-        # (47d)
-        # K equalities
-        Psi_mats = [self.cycle_indices(C) for C in cycle_set]
-        A_eq_xT = sp.identity(K)
-        A_eq_cycle = scipy.sparse.bmat([Psi_mats])
-
-        A_eq = _sparse_vstack(A_eq,
-                              scipy.sparse.bmat([[-A_eq_xT, A_eq_cycle]]),
-                              N_u + K * (T - 1))
-        b_eq = np.hstack([b_eq, np.zeros(K)])
 
         #############
         # Solve it! #
