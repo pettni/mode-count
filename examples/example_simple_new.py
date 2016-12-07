@@ -39,6 +39,10 @@ cp.solve_prefix_suffix(init, horizon, cycle_set)
 
 cp.test_solution()
 
+print cp.x
+print cp.u
+print cp.assignments
+
 # # Specify initial system distribution (sums to 30)
 # problem_data['init'] = [0, 1, 6, 4, 7, 10, 2, 0]
 

@@ -46,6 +46,8 @@ def solCallback(model, where):
 
 def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
 
+    # Warning: variables are lower bounded by 0!!
+
     num_var = Aiq.shape[1]
 
     if J == None:
@@ -68,9 +70,9 @@ def _solve_gurobi(c,Aiq,biq,Aeq,beq,J):
     x = []
     for i in range(num_var):
         if i in J:
-            x.append(m.addVar(vtype=GRB.INTEGER, obj=c[i], lb=-gurobipy.GRB.INFINITY))
+            x.append(m.addVar(vtype=GRB.INTEGER, obj=c[i]))
         else:
-            x.append(m.addVar(obj=c[i], lb=-gurobipy.GRB.INFINITY))
+            x.append(m.addVar(obj=c[i]))
     m.update()
 
     for i in range(Aiq.shape[0]):
