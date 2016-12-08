@@ -2,9 +2,9 @@ from nose.tools import *
 import numpy as np
 import networkx as nx
 from itertools import product
-from copy import deepcopy
 
-from modecount_new import CountingConstraint, ModeGraph, MultiCountingProblem, _cycle_matrix
+from modecount_new import CountingConstraint, ModeGraph, \
+    MultiCountingProblem, _cycle_matrix
 
 
 @raises(Exception)

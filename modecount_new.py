@@ -145,7 +145,6 @@ class MultiCountingProblem(object):
                     if not G.has_edge(v1, v2) or m not in G[v1][v2]['modes']:
                         raise Exception("Found invalid cycle")
 
-
     def solve_prefix_suffix(self):
 
         self.check_well_defined()
@@ -211,14 +210,18 @@ class MultiCountingProblem(object):
             for g in range(len(self.graphs)):
                 # Prefix counting
                 A_iq1_u, b_iq1 = \
-                    generate_prefix_counting_cstr(self.graphs[g], T, cc.X[g], cc.R)
+                    generate_prefix_counting_cstr(self.graphs[g], T,
+                                                  cc.X[g], cc.R)
                 A_iq1_list.append(
-                    sp.bmat([[A_iq1_u, sp.coo_matrix((T, N_x_list[g] + N_a_list[g] + N_b_list[g]))]])
+                    sp.bmat([[A_iq1_u, sp.coo_matrix((T, N_x_list[g] +
+                                                      N_a_list[g] +
+                                                      N_b_list[g]))]])
                 )
 
                 # Suffix counting
                 A_iq2_a, A_iq2_b, b_iq2, A_iq3_a, A_iq3_b, b_iq3 = \
-                    generate_suffix_counting_cstr(self.cycle_sets[g], cc.X[g], cc.R)
+                    generate_suffix_counting_cstr(self.cycle_sets[g],
+                                                  cc.X[g], cc.R)
 
                 b_head2 = sp.coo_matrix((N_a_list[g], l * J_list[g]))
                 b_tail2 = sp.coo_matrix((N_a_list[g], (L - 1 - l) * J_list[g]))
@@ -330,7 +333,8 @@ class MultiCountingProblem(object):
             G = self.graphs[g]
             if t < self.T:
                 u_t_g = self.u[g][:, t]
-                X_count += sum(u_t_g[G.order_fcn(v) + G.index_of_mode(m) * G.K()]
+                X_count += sum(u_t_g[G.order_fcn(v) +
+                                     G.index_of_mode(m) * G.K()]
                                for (v, m) in X[g])
             else:
                 ass_rot = [deque(a) for a in self.assignments[g]]
