@@ -98,7 +98,8 @@ class MultiCountingProblem(object):
         self.x = []
         self.assignments = []
 
-    def solve_prefix_suffix(self):
+    def check_well_defined(self):
+        # Check input data
         if self.T is None:
             raise Exception("No problem horizon `T` specified")
 
@@ -111,12 +112,14 @@ class MultiCountingProblem(object):
         if None in self.graphs:
             raise Exception("Graphs `graphs` missing")
 
+        # Check that graphs are deterministic
         for G in self.graphs:
             try:
                 G.check_valid()
             except Exception as e:
                 raise e
 
+        # Check validity of constraints
         for cc in self.constraints:
             if cc.order != self.order:
                 raise Exception("CountingConstraints must be of order " +
@@ -131,10 +134,21 @@ class MultiCountingProblem(object):
                 if not all([m in G.modes() for m in Xg_u]):
                     raise Exception("Mode-part of constraint invalid")
 
-        if (len(self.inits) != len(self.graphs)) or \
-           (len(self.cycle_sets) != len(self.graphs)):
-            raise Exception("Need same number of graphs, \
-                           initial conditions, and cycle sets")
+        # Check that cycles are valid
+        for g in range(len(self.graphs)):
+            G = self.graphs[g]
+            for cycle in self.cycle_sets[g]:
+                for j in range(len(cycle)):
+                    v1 = cycle[j][0]
+                    v2 = cycle[(j + 1) % len(cycle)][0]
+                    m = cycle[j][1]
+                    if not G.has_edge(v1, v2) or m not in G[v1][v2]['modes']:
+                        raise Exception("Found invalid cycle")
+
+
+    def solve_prefix_suffix(self):
+
+        self.check_well_defined()
 
         # Variables for each g in self.graphs:
         #  v_g := u_g[0] ... u_g[T-1] x_g[0] ... x_g[T-1]
@@ -380,9 +394,6 @@ def generate_prefix_dyn_cstr(G, T, init):
                       [-A_eq2_x],
                       [A_eq3_x]])
     b_eq = np.hstack([b_eq1, b_eq2, b_eq3])
-
-    assert A_eq_u.shape[0] == len(b_eq)
-    assert A_eq_x.shape[0] == len(b_eq)
 
     return A_eq_u, A_eq_x, b_eq
 

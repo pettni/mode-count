@@ -154,12 +154,12 @@ def test_multi():
     # Set up first class
     cp.graphs[0] = G1
     cp.inits[0] = [4, 0, 0]
-    cp.cycle_sets[0] = [[(3, 1)], [(2, 1)]]
+    cp.cycle_sets[0] = [[(3, 'on')], [(2, 'on')]]
 
     # Set up second class
     cp.graphs[1] = G1
     cp.inits[1] = [4, 0, 0]
-    cp.cycle_sets[1] = [[(3, 1)], [(2, 1)]]
+    cp.cycle_sets[1] = [[(3, 'on')], [(2, 'on')]]
 
     # Set up constraints
     cc1 = CountingConstraint(2)
