@@ -212,9 +212,7 @@ class SingleCountingProblem(object):
         for X, R in self.constraints:
             for u in self.u.transpose():
                 assert(sum(u[self.G.order_fcn(v) + m * self.G.K()]
-                           for v in self.G.nodes_iter()
-                           for m in range(self.G.M())
-                           if (v, m) in X) <= R
+                           for (v, m) in X) <= R
                        )
 
         # Check prefix-suffix connection
@@ -230,13 +228,13 @@ class SingleCountingProblem(object):
 
         # Check suffix counting bounds
         ass_rot = [deque(a) for a in self.assignments]
-        for X, R in self.constraints:
-            for t in range(1000):  # enough to go up to LCM(cycle lengths)
+        for t in range(1000):  # enough to go up to LCM(cycle lengths)
+            for X, R in self.constraints:
                 assert(sum(np.inner(_cycle_row(C, X), a)
                            for C, a in zip(self.cycle_set, ass_rot)
                            ) <= R)
-                for a in ass_rot:
-                    a.rotate()
+            for a in ass_rot:
+                a.rotate()
 
 
 class MultiCountingProblem(object):
@@ -291,39 +289,42 @@ class MultiCountingProblem(object):
             raise Exception("Need same number of graphs, \
                            initial conditions, and cycle sets")
 
+        # Variables for each g in self.graphs:
+        #  v_g := u_g[0] ... u_g[T-1] x_g[0] ... x_g[T-1]
+        #         a_g[0] ... a_g[C1-1] b[0] ... b[LJ-1]
+        # These are stacked horizontally as
+        #  v_0 v_1 ... v_G-1
+
         L = len(self.constraints)
-        J = sum(len(cycle_set) for cycle_set in self.cycle_sets)
         T = self.T
+        J_list = [len(cycle_set) for cycle_set in self.cycle_sets]
 
-        # variables for each G in self.graphs
-        #  u_G[0] ... u_G[T-1] x_G[0] ... x_G[T-1]  a_G[0] ... a_G[C1-1]
-
-        # slack vars
-        #   b[0] ... b[LJ-1]
-
+        # Variable counts for each class g
         N_u_list = [T * G.K() * G.M() for G in self.graphs]   # input vars
         N_x_list = [T * G.K() for G in self.graphs]   # state vars
-        N_a_list = [sum(len(C) for C in cycle_set) for cycle_set in self.cycle_sets]  # cycle vars
-        N_b = L * J    # bound vars
+        N_a_list = [sum(len(C) for C in cs) for cs in self.cycle_sets]
+        N_b_list = [L * J for J in J_list]    # bound vars
 
-        N_tot = sum(N_u_list) + sum(N_x_list) + sum(N_a_list) + N_b
+        N_tot = sum(N_u_list) + sum(N_x_list) + sum(N_a_list) + sum(N_b_list)
 
-
-        #### Add dynamics constraints ####
-
+        # Add dynamics constraints
         A_eq_list = []
         b_eq_list = []
 
-        for G, init, cycle_set \
-                in zip(self.graphs, self.inits, self.cycle_sets):
+        for g in range(len(self.graphs)):
+            G = self.graphs[g]
+            init = self.inits[g]
+            cycle_set = self.cycle_sets[g]
+
             A_eq1_u, A_eq1_x, b_eq1 = \
                 generate_prefix_dyn_cstr(G, T, init)
             A_eq2_x, A_eq2_a, b_eq2 = \
                 generate_prefix_suffix_cstr(G, T, cycle_set)
+            A_eq1_b = sp.coo_matrix((A_eq1_u.shape[0], N_b_list[g]))
 
             A_eq_list.append(
-                sp.bmat([[A_eq1_u, A_eq1_x, None],
-                         [None,    A_eq2_x, A_eq2_a]])
+                sp.bmat([[A_eq1_u, A_eq1_x, None, A_eq1_b],
+                         [None, A_eq2_x, A_eq2_a, None]])
             )
             b_eq_list.append(
                 np.hstack([b_eq1, b_eq2])
@@ -332,44 +333,73 @@ class MultiCountingProblem(object):
         A_eq = sp.block_diag(A_eq_list)
         b_eq = np.hstack(b_eq_list)
 
-        #### Add counting constraints ####
-
+        # Add counting constraints
         A_iq_list = []
         b_iq_list = []
-        for X, R in self.constraints:
-            A_iq1_list_u = []
-            A_iq1_list_x = []
-            A_iq1_list_a = []
+        for l in range(len(self.constraints)):
+            X, R = self.constraints[l]
+
+            # Count over classes: Should be stacked horizontally
+            A_iq1_list = []
+
+            # Bounded by slack vars: Should be block diagonalized
+            A_iq2_list = []
+            b_iq2_list = []
+
+            # Count over bound vars for each class: Should be stacked
+            # horizontally
+            A_iq3_list = []
 
             for g in range(len(self.graphs)):
-                A_iq1_u, b_iq1 = generate_prefix_counting_cstr(self.graphs[g], T, X[g], R)
-                A_iq1_list_u.append(A_iq1_u)
-                A_iq1_list_x.append(
-                    sp.coo_matrix((T, N_x_list[g]))
-                )
-                A_iq1_list_a.append(
-                    sp.coo_matrix((T, N_a_list[g]))
+                # Prefix counting
+                A_iq1_u, b_iq1 = \
+                    generate_prefix_counting_cstr(self.graphs[g], T, X[g], R)
+                A_iq1_list.append(
+                    sp.bmat([[A_iq1_u, sp.coo_matrix((T, N_x_list[g] + N_a_list[g] + N_b_list[g]))]])
                 )
 
-            A_iq_list.append(
-                sp.bmat([[A for A_list in zip(A_iq1_list_u,
-                                              A_iq1_list_x,
-                                              A_iq1_list_a)
-                         for A in A_list]])
-            )
+                # Suffix counting
+                A_iq2_a, A_iq2_b, b_iq2, A_iq3_a, A_iq3_b, b_iq3 = \
+                    generate_suffix_counting_cstr(self.cycle_sets[g], X[g], R)
+
+                b_head2 = sp.coo_matrix((N_a_list[g], l * J_list[g]))
+                b_tail2 = sp.coo_matrix((N_a_list[g], (L - 1 - l) * J_list[g]))
+                A_iq2_b = sp.bmat([[b_head2, A_iq2_b, b_tail2]])
+                b_head3 = sp.coo_matrix((1, l * J_list[g]))
+                b_tail3 = sp.coo_matrix((1, (L - 1 - l) * J_list[g]))
+                A_iq3_b = sp.bmat([[b_head3, A_iq3_b, b_tail3]])
+
+                A_iq2_u = sp.coo_matrix((N_a_list[g], N_u_list[g]))
+                A_iq2_x = sp.coo_matrix((N_a_list[g], N_x_list[g]))
+
+                A_iq2_list.append(
+                    sp.bmat([[A_iq2_u, A_iq2_x, A_iq2_a, A_iq2_b]])
+                )
+                b_iq2_list.append(b_iq2)
+
+                A_iq3_list.append(
+                    sp.bmat([[sp.coo_matrix((1, N_u_list[g] + N_x_list[g])), A_iq3_a, A_iq3_b]])
+                )
+
+            # Stack horizontally
+            A_iq_list.append(sp.bmat([A_iq1_list]))
             b_iq_list.append(b_iq1)
-        A_iq = sp.bmat([[A] for A in A_iq_list])
-        b_iq = np.hstack(b_iq_list)
 
-        # Add "room" for slack variables
-        # A_eq = sp.bmat([[A_eq, sp.coo_matrix((A_eq.shape[0], N_b))]])
-        # A_iq = sp.bmat([[A_iq, sp.coo_matrix((A_iq.shape[0], N_b))]])
+            # Stack by block
+            A_iq_list.append(sp.block_diag(A_iq2_list))
+            b_iq_list.append(np.hstack(b_iq2_list))
 
-        print A_iq.shape
-        print b_iq.shape
+            # Stack horizontally
+            A_iq_list.append(sp.bmat([A_iq3_list]))
+            b_iq_list.append(b_iq3)
 
-        print A_eq.shape
-        print b_eq.shape
+        # Stack everything vertically
+        if len(A_iq_list) > 0:
+            A_iq = sp.bmat([[A] for A in A_iq_list])
+            b_iq = np.hstack(b_iq_list)
+        else:
+            A_iq = sp.coo_matrix((0, N_tot))
+            b_iq = np.zeros(0)
 
         # Solve it
         sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq)
@@ -377,44 +407,82 @@ class MultiCountingProblem(object):
         # Extract solution (if valid)
         if sol['status'] == 2:
             idx0 = 0
-            for i in range(len(self.graphs)):
-                N_u, N_x, N_a = zip(N_u_list, N_x_list, N_a_list)[i]
-                G = self.graphs[i]
-                init = self.inits[i]
-                cycle_set = self.cycle_sets[i]
-
+            for g in range(len(self.graphs)):
                 self.u.append(
-                    np.array(sol['x'][idx0:idx0 + N_u])
-                      .reshape(T, G.K() * G.M()).transpose()
+                    np.array(sol['x'][idx0:idx0 + N_u_list[g]])
+                      .reshape(T, self.graphs[g].K() * self.graphs[g].M())
+                      .transpose()
                 )
                 self.x.append(
                     np.hstack([
-                        np.array(init).reshape(len(init), 1),
-                        np.array(sol['x'][idx0 + N_u:idx0 + N_u + N_x])
-                          .reshape(T, G.K()).transpose()
+                        np.array(self.inits[g]).reshape(len(self.inits[g]), 1),
+                        np.array(sol['x'][idx0 + N_u_list[g]:
+                                          idx0 + N_u_list[g] + N_x_list[g]])
+                          .reshape(T, self.graphs[g].K()).transpose()
                     ])
                 )
 
-                cycle_lengths = [len(C) for C in cycle_set]
+                cycle_lengths = [len(C) for C in self.cycle_sets[g]]
                 self.assignments.append(
-                    [sol['x'][idx0 + N_u + N_x + an:
-                              idx0 + N_u + N_x + an + dn]
+                    [sol['x'][idx0 + N_u_list[g] + N_x_list[g] + an:
+                              idx0 + N_u_list[g] + N_x_list[g] + an + dn]
                      for an, dn in zip(np.cumsum([0] +
                                        cycle_lengths[:-1]),
                                        cycle_lengths)]
                 )
-                idx0 += N_u + N_x + N_a
-
-        print self.x
-        print self.u
-        print self.assignments
+                idx0 += N_u_list[g] + N_x_list[g] + N_a_list[g] + N_b_list[g]
 
     def test_solution(self):
-        pass
+        for g in range(len(self.graphs)):
+            # Check dynamics
+            np.testing.assert_almost_equal(
+                self.x[g][:, 1:],
+                self.graphs[g].system_matrix().dot(self.u[g])
+            )
 
-##################################################################
-################  Constraint-generating functions ################
-##################################################################
+            # Check control constraints
+            np.testing.assert_almost_equal(
+                self.x[g][:, :-1],
+                _id_stacked(self.graphs[g].K(), self.graphs[g].M())
+                    .dot(self.u[g])
+            )
+
+            # Check prefix-suffix connection
+            assgn_sum_g = np.zeros(self.graphs[g].K())
+            for C, a in zip(self.cycle_sets[g], self.assignments[g]):
+                for (Ci, ai) in zip(C, a):
+                    assgn_sum_g[self.graphs[g].order_fcn(Ci[0])] += ai
+
+            np.testing.assert_almost_equal(
+                self.x[g][:, -1],
+                assgn_sum_g
+            )
+
+        # Check counting constraints
+        for X, R in self.constraints:
+            for t in range(1000):  # enough to do T + LCM(cycle_lengths)
+                assert(self.mode_count(X, t) <= R)
+
+    def mode_count(self, X, t):
+        X_count = 0
+        for g in range(len(self.graphs)):
+            G = self.graphs[g]
+            if t < self.T:
+                u_t_g = self.u[g][:, t]
+                X_count += sum(u_t_g[G.order_fcn(v) + m * G.K()]
+                               for (v, m) in X[g])
+            else:
+                ass_rot = [deque(a) for a in self.assignments[g]]
+                for a in ass_rot:
+                    a.rotate(t - self.T)
+                X_count += sum(np.inner(_cycle_row(C, X[g]), a)
+                               for C, a in zip(self.cycle_sets[g],
+                                               ass_rot))
+        return X_count
+
+####################################
+#  Constraint-generating functions #
+####################################
 
 
 def generate_prefix_dyn_cstr(G, T, init):
@@ -543,9 +611,9 @@ def generate_suffix_counting_cstr(cycle_set, X, R):
 
     return A_iq1_a, A_iq1_b, b_iq1, A_iq2_a, A_iq2_b, b_iq2
 
-##################################################################
-###################  Helper functions ############################
-##################################################################
+####################
+# Helper functions #
+####################
 
 
 def _id_stacked(K, M):
