@@ -18,16 +18,6 @@ def test_multimode_error():
 
 
 @raises(Exception)
-def test_mudenumber_error():
-    G = ModeGraph()
-    G.add_nodes_from([1, 2, 3])
-
-    G.add_edge(1, 3, modes=[2])
-    G.add_edge(1, 2, modes=[1])
-    G.check_valid()
-
-
-@raises(Exception)
 def test_orderfcn_error():
     G = ModeGraph()
     G.add_nodes_from([1, 2, 3])
@@ -153,9 +143,9 @@ def test_multi():
     G1 = ModeGraph()
     G1.add_nodes_from([1, 2, 3])
 
-    G1.add_path([1, 3, 3], modes=[1])
-    G1.add_path([1, 2], modes=[0])
-    G1.add_path([2, 2], modes=[1])
+    G1.add_path([1, 3, 3], modes=['on'])
+    G1.add_path([1, 2], modes=['off'])
+    G1.add_path([2, 2], modes=['on'])
 
     # Set up the mode-counting problem
     cp = MultiCountingProblem(2)
@@ -173,13 +163,13 @@ def test_multi():
 
     # Set up constraints
     cc1 = CountingConstraint(2)
-    cc1.X[0] = set([(2, 0), (2, 1)])
+    cc1.X[0] = set([(2, 'on'), (2, 'off')])
     cc1.X[1] = set()
     cc1.R = 0
 
     cc2 = CountingConstraint(2)
     cc2.X[0] = set()
-    cc2.X[1] = set([(3, 0), (3, 1)])
+    cc2.X[1] = set([(3, 'on'), (3, 'off')])
     cc2.R = 0
 
     cp.constraints += [cc1, cc2]

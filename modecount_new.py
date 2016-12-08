@@ -11,6 +11,7 @@ class ModeGraph(nx.DiGraph):
     def __init__(self):
         super(ModeGraph, self).__init__()
         self.order_fcn = lambda v: self.nodes().index(v)
+        self.mode_list = None
 
     def set_order_fcn(self, fcn):
         """Specify an order function `fcn` : G.nodes() --> range(K)"""
@@ -32,12 +33,12 @@ class ModeGraph(nx.DiGraph):
                                  (data[:, 1], data[:, 2])),
                                  shape=(self.K(), self.K()))
 
-        return sp.bmat([[mode_matrix(m) for m in range(self.M())]])
+        return sp.bmat([[mode_matrix(m) for m in self.modes()]])
 
     def index_matrix(self, C):
         """Compute matrix Psi_C s.t.
            Psi_C alpha
-           is a G-vector"""
+           is a vector w.r.t. graph indexing"""
         row_idx = [self.order_fcn(v) for v, _ in C]
         col_idx = range(len(C))
         vals = np.ones(len(C))
@@ -46,25 +47,34 @@ class ModeGraph(nx.DiGraph):
         )
 
     def modes(self):
-        return set().union(*[d['modes']
-                           for _, _, d in self.edges_iter(data=True)])
+        """Return set of all modes"""
+        if self.mode_list is None:
+            self.mode_list = list(set().union(*[d['modes']
+                                              for _, _, d
+                                              in self.edges_iter(data=True)]))
+        return self.mode_list
+
+    def mode(self, m):
+        """Return mode with index `m`"""
+        return self.modes()[m]
+
+    def index_of_mode(self, mode):
+        return self.modes().index(mode)
 
     def M(self):
-        return max(self.modes()) + 1
+        """Return total number of modes"""
+        return len(self.modes())
 
     def K(self):
+        """Return total number of nodes"""
         return len(self)
 
     def check_valid(self):
+        """Verify that graph is deterministic"""
         for v in self.nodes_iter():
             M = [self[v][w]['modes'] for w in self[v]]
             if sum(len(m) for m in M) != len(set().union(*M)):
                 raise Exception("Nondeterministic graph")
-
-        modes = set().union(*[d['modes']
-                              for _, _, d in self.edges_iter(data=True)])
-        if modes != set(range(max(modes) + 1)):
-            raise Exception("Modes incorrectly numbered")
 
 
 class CountingConstraint(object):
@@ -212,7 +222,8 @@ class MultiCountingProblem(object):
                 b_iq2_list.append(b_iq2)
 
                 A_iq3_list.append(
-                    sp.bmat([[sp.coo_matrix((1, N_u_list[g] + N_x_list[g])), A_iq3_a, A_iq3_b]])
+                    sp.bmat([[sp.coo_matrix((1, N_u_list[g] + N_x_list[g])),
+                              A_iq3_a, A_iq3_b]])
                 )
 
             # Stack horizontally
@@ -266,6 +277,8 @@ class MultiCountingProblem(object):
                 )
                 idx0 += N_u_list[g] + N_x_list[g] + N_a_list[g] + N_b_list[g]
 
+        return sol['status']
+
     def test_solution(self):
         for g in range(len(self.graphs)):
             # Check dynamics
@@ -303,7 +316,7 @@ class MultiCountingProblem(object):
             G = self.graphs[g]
             if t < self.T:
                 u_t_g = self.u[g][:, t]
-                X_count += sum(u_t_g[G.order_fcn(v) + m * G.K()]
+                X_count += sum(u_t_g[G.order_fcn(v) + G.index_of_mode(m) * G.K()]
                                for (v, m) in X[g])
             else:
                 ass_rot = [deque(a) for a in self.assignments[g]]
@@ -350,7 +363,7 @@ def generate_prefix_dyn_cstr(G, T, init):
     ban_idx = [G.order_fcn(v) + m * K
                for v in G.nodes_iter()
                for m in range(M)
-               if m not in G.node_modes(v)]
+               if G.mode(m) not in G.node_modes(v)]
     A_eq3_u_part = sp.coo_matrix(
         (np.ones(len(ban_idx)), (range(len(ban_idx)), ban_idx)),
         shape=(len(ban_idx), K * M)
@@ -381,7 +394,7 @@ def generate_prefix_counting_cstr(G, T, X, R):
 
     # variables: u[0], ..., u[T-1]
 
-    col_idx = [G.order_fcn(v) + m * K for (v, m) in X]
+    col_idx = [G.order_fcn(v) + G.index_of_mode(m) * K for (v, m) in X]
     if len(col_idx) == 0:
         # No matches
         return sp.coo_matrix((T, T * K * M)), R * np.ones(T)
