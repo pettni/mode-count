@@ -67,183 +67,21 @@ class ModeGraph(nx.DiGraph):
             raise Exception("Modes incorrectly numbered")
 
 
-class SingleCountingProblem(object):
-    """Class representing a graph counting problem"""
-    def __init__(self):
-
-        # Problem data
-        self.G = None
-        self.constraints = []
-        self.init = None
-        self.cycle_set = None
-        self.T = None
-
-        # Solution data
-        self.x = None
-        self.u = None
-        self.assignments = None
-
-    def solve_prefix_suffix(self):
-        """Solve counting problem given an initial state, a horizon T,
-        and a set of (augmented) cycles"""
-
-        if self.T is None:
-            raise Exception("No problem horizon `T` specified")
-
-        if self.init is None:
-            raise Exception("No initial condition `init` specified")
-
-        if self.cycle_set is None:
-            raise Exception("No cycle set `cycle_set` specified")
-
-        if self.G is None:
-            raise Exception("ModeGraph `G` not set")
-
-        try:
-            self.G.check_valid()
-        except Exception as e:
-            raise e
-
-        # Todo:
-        #   - prune graph to find invariant set
-
-        K = self.G.K()
-        M = self.G.M()
-        L = len(self.constraints)
-        J = len(self.cycle_set)
-        cycle_set = self.cycle_set
-        T = self.T
-
-        # variables: u[0], ..., u[T-1], x[1], ..., x[T], a[0], ..., a[C-1]
-        N_u = T * K * M   # input vars
-        N_x = T * K   # state vars
-        N_a = sum(len(C) for C in cycle_set)  # cycle vars
-        N_b = L * J    # bound vars
-
-        N_tot = N_u + N_x + N_a + N_b
-
-        A_eq1_u, A_eq1_x, b_eq1 = \
-            generate_prefix_dyn_cstr(self.G, self.T, self.init)
-        A_eq2_x, A_eq2_a, b_eq2 = \
-            generate_prefix_suffix_cstr(self.G, self.T, self.cycle_set)
-        A_eq1_b = sp.coo_matrix((A_eq1_x.shape[0], N_b))
-
-        A_eq = sp.bmat([[A_eq1_u, A_eq1_x, None, A_eq1_b],
-                        [None, A_eq2_x, A_eq2_a, None]])
-        b_eq = np.hstack([b_eq1, b_eq2])
-
-        A_iq_list = []
-        b_iq_list = []
-
-        for l in range(len(self.constraints)):
-            X, R = self.constraints[l]
-
-            # Get T constraints
-            A_iq1_u_j, b_iq1 = \
-                generate_prefix_counting_cstr(self.G, self.T, X, R)
-            A_iq1_x_j = sp.coo_matrix((T, N_x))
-
-            # Get N_a + 1 constraints
-            A_iq2_a_j_1, A_iq2_b_j_1, b_iq2_j_1, \
-                A_iq2_a_j_2, A_iq2_b_j_2, b_iq2_j_2 = \
-                generate_suffix_counting_cstr(self.cycle_set, X, R)
-
-            A_iq2_a_j = sp.bmat([[A_iq2_a_j_1],
-                                 [A_iq2_a_j_2]])
-
-            # Need padding to select correct slack variable
-            b_head = sp.coo_matrix((N_a, l * J))
-            b_tail = sp.coo_matrix((N_a, (L - 1 - l) * J))
-            A_iq2_b_j = sp.bmat([[b_head, A_iq2_b_j_1, b_tail],
-                                 [None, A_iq2_b_j_2, None]])
-
-            b_iq2 = np.hstack([b_iq2_j_1, b_iq2_j_2])
-
-            # Stack it!
-            A_iq_list.append(
-                sp.bmat([[A_iq1_u_j, A_iq1_x_j, None, None],
-                         [None, None, A_iq2_a_j, A_iq2_b_j]])
-            )
-            b_iq_list.append(
-                np.hstack([b_iq1, b_iq2])
-            )
-
-        A_iq = sp.bmat([[A] for A in A_iq_list])
-        b_iq = np.hstack(b_iq_list)
-
-        # Solve it!
-        sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq)
-
-        # Extract solution (if valid)
-        if sol['status'] == 2:
-            self.u = np.array(sol['x'][0:N_u]).reshape(T, K * M).transpose()
-            self.x = np.hstack([
-                np.array(self.init).reshape(len(self.init), 1),
-                np.array(sol['x'][N_u:N_u + N_x]).reshape(T, K).transpose()
-            ])
-
-            self.cycle_set = cycle_set
-
-            cycle_lengths = [len(C) for C in cycle_set]
-            self.assignments = [sol['x'][N_u + N_x + an: N_u + N_x + an + dn]
-                                for an, dn in zip(np.cumsum([0] +
-                                                  cycle_lengths[:-1]),
-                                                  cycle_lengths)
-                                ]
-
-        return sol['status']
-
-    def test_solution(self):
-        """Test if a solution satisfies the constraints"""
-
-        # Check dynamics
-        np.testing.assert_almost_equal(
-            self.x[:, 1:],
-            self.G.system_matrix().dot(self.u)
-        )
-
-        # Check control constraints
-        np.testing.assert_almost_equal(
-            self.x[:, :-1],
-            _id_stacked(self.G.K(), self.G.M()).dot(self.u)
-        )
-
-        # Check prefix counting bounds
-        for X, R in self.constraints:
-            for u in self.u.transpose():
-                assert(sum(u[self.G.order_fcn(v) + m * self.G.K()]
-                           for (v, m) in X) <= R
-                       )
-
-        # Check prefix-suffix connection
-        assgn_sum = np.zeros(self.G.K())
-        for C, a in zip(self.cycle_set, self.assignments):
-            for (Ci, ai) in zip(C, a):
-                assgn_sum[self.G.order_fcn(Ci[0])] += ai
-
-        np.testing.assert_almost_equal(
-            self.x[:, -1],
-            assgn_sum
-        )
-
-        # Check suffix counting bounds
-        ass_rot = [deque(a) for a in self.assignments]
-        for t in range(1000):  # enough to go up to LCM(cycle lengths)
-            for X, R in self.constraints:
-                assert(sum(np.inner(_cycle_row(C, X), a)
-                           for C, a in zip(self.cycle_set, ass_rot)
-                           ) <= R)
-            for a in ass_rot:
-                a.rotate()
+class CountingConstraint(object):
+    def __init__(self, order):
+        self.X = [set()] * order
+        self.order = order
+        self.R = 0
 
 
 class MultiCountingProblem(object):
     """For multiple classes"""
-    def __init__(self):
-        self.graphs = []
+    def __init__(self, order):
+        self.order = order
+        self.graphs = [None] * order
         self.constraints = []
-        self.inits = []
-        self.cycle_sets = []
+        self.inits = [None] * order
+        self.cycle_sets = [None] * order
         self.T = None
 
         self.u = []
@@ -254,14 +92,14 @@ class MultiCountingProblem(object):
         if self.T is None:
             raise Exception("No problem horizon `T` specified")
 
-        if len(self.inits) == 0:
-            raise Exception("No initial condition `inits` specified")
+        if None in self.inits:
+            raise Exception("Initial conditions `inits` missing")
 
-        if len(self.cycle_sets) == 0:
-            raise Exception("No cycle set `cycle_sets` specified")
+        if None in self.cycle_sets:
+            raise Exception("Cycle sets `cycle_sets` missing")
 
-        if len(self.graphs) == 0:
-            raise Exception("ModeGraphs `graphs` not set")
+        if None in self.graphs:
+            raise Exception("Graphs `graphs` missing")
 
         for G in self.graphs:
             try:
@@ -269,15 +107,14 @@ class MultiCountingProblem(object):
             except Exception as e:
                 raise e
 
-        for constraint in self.constraints:
-            X, R = constraint
-            if len(X) != len(self.graphs):
-                raise Exception("Each constraint needs to be on \
-                                 form (X_1, ..., X_P) for classes p")
-            for Xg, G in zip(X, self.graphs):
-                if len(Xg) == 0:
+        for cc in self.constraints:
+            if cc.order != self.order:
+                raise Exception("CountingConstraints must be of order " +
+                                str(self.order))
+            for g in range(len(self.graphs)):
+                if len(cc.X[g]) == 0:
                     continue
-                Xg_x, Xg_u = zip(*Xg)
+                Xg_x, Xg_u = zip(*cc.X[g])
                 if not all([x in G.nodes() for x in Xg_x]):
                     print set(Xg_x) <= set(G.nodes())
                     raise Exception("State-part of constraint invalid")
@@ -307,19 +144,16 @@ class MultiCountingProblem(object):
 
         N_tot = sum(N_u_list) + sum(N_x_list) + sum(N_a_list) + sum(N_b_list)
 
-        # Add dynamics constraints
+        # Add dynamics constraints, should be block diagonalized
         A_eq_list = []
         b_eq_list = []
 
         for g in range(len(self.graphs)):
-            G = self.graphs[g]
-            init = self.inits[g]
-            cycle_set = self.cycle_sets[g]
-
             A_eq1_u, A_eq1_x, b_eq1 = \
-                generate_prefix_dyn_cstr(G, T, init)
+                generate_prefix_dyn_cstr(self.graphs[g], T, self.inits[g])
             A_eq2_x, A_eq2_a, b_eq2 = \
-                generate_prefix_suffix_cstr(G, T, cycle_set)
+                generate_prefix_suffix_cstr(self.graphs[g], T,
+                                            self.cycle_sets[g])
             A_eq1_b = sp.coo_matrix((A_eq1_u.shape[0], N_b_list[g]))
 
             A_eq_list.append(
@@ -337,7 +171,7 @@ class MultiCountingProblem(object):
         A_iq_list = []
         b_iq_list = []
         for l in range(len(self.constraints)):
-            X, R = self.constraints[l]
+            cc = self.constraints[l]
 
             # Count over classes: Should be stacked horizontally
             A_iq1_list = []
@@ -353,14 +187,14 @@ class MultiCountingProblem(object):
             for g in range(len(self.graphs)):
                 # Prefix counting
                 A_iq1_u, b_iq1 = \
-                    generate_prefix_counting_cstr(self.graphs[g], T, X[g], R)
+                    generate_prefix_counting_cstr(self.graphs[g], T, cc.X[g], cc.R)
                 A_iq1_list.append(
                     sp.bmat([[A_iq1_u, sp.coo_matrix((T, N_x_list[g] + N_a_list[g] + N_b_list[g]))]])
                 )
 
                 # Suffix counting
                 A_iq2_a, A_iq2_b, b_iq2, A_iq3_a, A_iq3_b, b_iq3 = \
-                    generate_suffix_counting_cstr(self.cycle_sets[g], X[g], R)
+                    generate_suffix_counting_cstr(self.cycle_sets[g], cc.X[g], cc.R)
 
                 b_head2 = sp.coo_matrix((N_a_list[g], l * J_list[g]))
                 b_tail2 = sp.coo_matrix((N_a_list[g], (L - 1 - l) * J_list[g]))
@@ -459,9 +293,9 @@ class MultiCountingProblem(object):
             )
 
         # Check counting constraints
-        for X, R in self.constraints:
+        for cc in self.constraints:
             for t in range(1000):  # enough to do T + LCM(cycle_lengths)
-                assert(self.mode_count(X, t) <= R)
+                assert(self.mode_count(cc.X, t) <= cc.R)
 
     def mode_count(self, X, t):
         X_count = 0

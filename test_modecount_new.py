@@ -4,7 +4,7 @@ import networkx as nx
 from itertools import product
 from copy import deepcopy
 
-from modecount_new import SingleCountingProblem, ModeGraph, MultiCountingProblem, _cycle_matrix
+from modecount_new import CountingConstraint, ModeGraph, MultiCountingProblem, _cycle_matrix
 
 
 @raises(Exception)
@@ -117,22 +117,32 @@ def test_comprehensive():
     G.add_path([6, 7, 8, 8], modes=[0])
 
     # Set up the mode-counting problem
-    cp = MultiCountingProblem()
+    cp = MultiCountingProblem(1)
 
-    cp.graphs.append(G)
-    cp.inits.append([0, 1, 6, 4, 7, 10, 2, 0])
+    cp.graphs[0] = G
+    cp.inits[0] = [0, 1, 6, 4, 7, 10, 2, 0]
     cp.T = 5
 
-    cp.constraints.append(([list(product(G.nodes(), [0]))], 16))
-    cp.constraints.append(([list(product(G.nodes(), [1]))], 30 - 15))
-    cp.constraints.append(([list(product(G.nodes_with_selfloops(), [0, 1]))], 0))
+    cc1 = CountingConstraint(1)
+    cc1.X[0] = set(product(G.nodes(), [0]))
+    cc1.R = 16
+
+    cc2 = CountingConstraint(1)
+    cc2.X[0] = set(product(G.nodes(), [1]))
+    cc2.R = 30 - 15
+
+    cc3 = CountingConstraint(1)
+    cc3.X[0] = set(product(G.nodes_with_selfloops(), [0, 1]))
+    cc3.R = 0
+
+    cp.constraints += [cc1, cc2, cc3]
 
     def outg(c):
         return [G[c[i]][c[(i + 1) % len(c)]]['modes'][0]
                 for i in range(len(c))]
 
-    cp.cycle_sets.append([zip(c, outg(c))
-                          for c in nx.simple_cycles(nx.DiGraph(G))])
+    cp.cycle_sets[0] = [zip(c, outg(c))
+                        for c in nx.simple_cycles(nx.DiGraph(G))]
 
     cp.solve_prefix_suffix()
 
@@ -147,27 +157,32 @@ def test_multi():
     G1.add_path([1, 2], modes=[0])
     G1.add_path([2, 2], modes=[1])
 
-    G2 = deepcopy(G1)
-
     # Set up the mode-counting problem
-    cp = MultiCountingProblem()
-
-    cp.graphs.append(G1)
-    cp.graphs.append(G2)
-
-    cp.constraints.append(
-        ([[(2, 0), (2, 1)], set()], 0)
-    )
-    cp.constraints.append(
-        ([set(), [(3, 0), (3, 1)]], 0)
-    )
-
-    cp.inits.append([4, 0, 0])
-    cp.inits.append([4, 0, 0])
-
+    cp = MultiCountingProblem(2)
     cp.T = 3
-    cp.cycle_sets.append([[(3,1)], [(2,1)]])
-    cp.cycle_sets.append([[(3,1)], [(2,1)]])
+
+    # Set up first class
+    cp.graphs[0] = G1
+    cp.inits[0] = [4, 0, 0]
+    cp.cycle_sets[0] = [[(3, 1)], [(2, 1)]]
+
+    # Set up second class
+    cp.graphs[1] = G1
+    cp.inits[1] = [4, 0, 0]
+    cp.cycle_sets[1] = [[(3, 1)], [(2, 1)]]
+
+    # Set up constraints
+    cc1 = CountingConstraint(2)
+    cc1.X[0] = set([(2, 0), (2, 1)])
+    cc1.X[1] = set()
+    cc1.R = 0
+
+    cc2 = CountingConstraint(2)
+    cc2.X[0] = set()
+    cc2.X[1] = set([(3, 0), (3, 1)])
+    cc2.R = 0
+
+    cp.constraints += [cc1, cc2]
 
     cp.solve_prefix_suffix()
 
