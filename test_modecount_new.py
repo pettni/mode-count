@@ -162,12 +162,15 @@ def test_multi():
     cp.cycle_sets[1] = [[(3, 'on')], [(2, 'on')]]
 
     # Set up constraints
+    
+    # Count subsystems of class 0 that are at node `2` regardless of mode
     cc1 = CountingConstraint(2)
     cc1.X[0] = set([(2, 'on'), (2, 'off')])
     cc1.X[1] = set()
     cc1.R = 0
 
     cc2 = CountingConstraint(2)
+    # Count subsystems of class 1 that are at node `3` regardless of mode
     cc2.X[0] = set()
     cc2.X[1] = set([(3, 'on'), (3, 'off')])
     cc2.R = 0
