@@ -3,7 +3,7 @@ import networkx as nx
 import scipy.sparse as sp
 from collections import deque
 
-from optimization_wrappers import *
+# from optimization_wrappers import *
 
 
 class ModeGraph(nx.DiGraph):
@@ -42,7 +42,7 @@ class ModeGraph(nx.DiGraph):
         row_idx = [self.order_fcn(v) for v, _ in C]
         col_idx = range(len(C))
         vals = np.ones(len(C))
-        return scipy.sparse.coo_matrix(
+        return sp.coo_matrix(
             (vals, (row_idx, col_idx)), shape=(self.K(), len(C))
         )
 
@@ -263,6 +263,11 @@ class MultiCountingProblem(object):
             A_iq = sp.coo_matrix((0, N_tot))
             b_iq = np.zeros(0)
 
+        print A_iq.shape
+        print b_iq.shape
+        print A_eq.shape
+        print b_eq.shape
+
         # Solve it
         sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq)
 
@@ -434,11 +439,11 @@ def generate_prefix_suffix_cstr(G, T, cycle_set):
 
     Psi_mats = [G.index_matrix(C) for C in cycle_set]
 
-    A_eq_x = scipy.sparse.bmat(
+    A_eq_x = sp.bmat(
         [[sp.coo_matrix((K, K * (T - 1))), -sp.identity(K)]]
     )
 
-    A_eq_a = scipy.sparse.bmat([Psi_mats])
+    A_eq_a = sp.bmat([Psi_mats])
     b_eq = np.zeros(K)
 
     return A_eq_x, A_eq_a, b_eq
