@@ -13,14 +13,14 @@ Cth_1 = 2.
 Rth_1 = 2.
 Pm_1 = 5.6
 eta_tcl_1 = 2.5
-pop_size_1 = 15
+pop_size_1 = 10000
 
 # Set 2 of TCL parameters
 Cth_2 = 2.2
 Rth_2 = 2.2
 Pm_2 = 5.9
 eta_tcl_2 = 2.5
-pop_size_2 = 15
+pop_size_2 = 10000
 
 # Ambient temperature
 theta_a = 32.
@@ -35,6 +35,9 @@ eps_2 = 0.2                   # desired bisimulation approximation
 
 # Disturbance level (same for both)
 delta_vf = 0.025  # disturbance level
+
+# Prefix horizon
+horizon = 10
 
 # Derived constants
 a_1 = 1. / (Rth_1 * Cth_1)
@@ -168,7 +171,7 @@ cp.cycle_sets[1] = cycle_set2
 cc1 = CountingConstraint(2)  # mode counting
 cc1.X[0] = set(product(G1.nodes(), ['on']))
 cc1.X[1] = set(product(G2.nodes(), ['on']))
-cc1.R = (pop_size_1 + pop_size_2) / 2
+cc1.R = (pop_size_1 + pop_size_2) / 3
 
 cc2 = CountingConstraint(2)  # safety
 unsafe_1 = [v for v, d in G1.nodes_iter(data=True)
@@ -182,5 +185,10 @@ cc2.X[1] = set(product(unsafe_2, ['on', 'off']))
 cp.constraints += [cc1, cc2]
 
 # Problem horizon
-cp.T = 10
-cp.solve_prefix_suffix()
+cp.T = horizon
+print cp.solve_prefix_suffix()
+
+cp.test_solution()
+
+for t in range(horizon * 5):
+    print cp.mode_count(cc1.X, t)
