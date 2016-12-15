@@ -44,6 +44,16 @@ def test_system_matrix():
     )
 
 
+def test_mode_graph():
+    G = ModeGraph()
+    G.add_nodes_from([1, 2, 3])
+    G.add_path([3, 2, 1], modes=[0])
+    G.add_path([1, 2, 3], modes=[1])
+
+    np.testing.assert_equal(G.post(3, 0), 2)
+    np.testing.assert_equal(G.post(2, 1), 3)
+
+
 def test_cycle_indices():
     G = ModeGraph()
     G.add_nodes_from([5, 1, 2, 3, 4])
@@ -138,6 +148,15 @@ def test_comprehensive():
 
     cp.test_solution()
 
+    # xi = [[i] * cp.inits[0][i] for i in ]
+    for t in range(40):
+        actions = cp.get_input(xi, t)
+        for k1 in range(4):
+            xi[0][k1] = G1.post(xi[0][k1], actions[0][k1])
+
+        print xi
+
+
 
 def test_multi():
     G1 = ModeGraph()
@@ -162,7 +181,7 @@ def test_multi():
     cp.cycle_sets[1] = [[(3, 'on')], [(2, 'on')]]
 
     # Set up constraints
-    
+
     # Count subsystems of class 0 that are at node `2` regardless of mode
     cc1 = CountingConstraint(2)
     cc1.X[0] = set([(2, 'on'), (2, 'off')])
@@ -180,3 +199,13 @@ def test_multi():
     cp.solve_prefix_suffix()
 
     cp.test_solution()
+
+    xi = [[1, 1, 1, 1], [1, 1, 1, 1]]
+    for t in range(40):
+        actions = cp.get_input(xi, t)
+        for k1 in range(4):
+            xi[0][k1] = G1.post(xi[0][k1], actions[0][k1])
+
+        for k2 in range(4):
+            xi[1][k2] = G1.post(xi[1][k2], actions[1][k2])
+        print xi

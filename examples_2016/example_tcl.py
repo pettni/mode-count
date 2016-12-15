@@ -29,6 +29,7 @@ theta_a = 32.
 eta_1 = 0.002               # space discretization
 tau_1 = 0.05                  # time discretization
 eps_1 = 0.2                   # desired bisimulation approximation
+
 eta_2 = 0.0015               # space discretization
 tau_2 = 0.05                  # time discretization
 eps_2 = 0.2                   # desired bisimulation approximation
