@@ -3,7 +3,7 @@ import networkx as nx
 import scipy.sparse as sp
 from collections import deque
 
-# from optimization_wrappers import *
+from optimization_wrappers import *
 
 
 class ModeGraph(nx.DiGraph):
@@ -75,6 +75,15 @@ class ModeGraph(nx.DiGraph):
             M = [self[v][w]['modes'] for w in self[v]]
             if sum(len(m) for m in M) != len(set().union(*M)):
                 raise Exception("Nondeterministic graph")
+
+    def post(self, node, mode):
+        """Return next state for node `node` and action `mode`"""
+        if mode not in self.node_modes(node):
+            raise Exception("Invalid action " + str(mode) +
+                            " at " + str(node))
+        for w in self[node]:
+            if mode in self[node][w]['modes']:
+                return w
 
 
 class CountingConstraint(object):
@@ -263,14 +272,8 @@ class MultiCountingProblem(object):
             A_iq = sp.coo_matrix((0, N_tot))
             b_iq = np.zeros(0)
 
-        print A_iq.shape
-        print b_iq.shape
-        print A_eq.shape
-        print b_eq.shape
-
         # Solve it
         sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq)
-
         # Extract solution (if valid)
         if sol['status'] == 2:
             idx0 = 0
@@ -298,7 +301,6 @@ class MultiCountingProblem(object):
                                        cycle_lengths)]
                 )
                 idx0 += N_u_list[g] + N_x_list[g] + N_a_list[g] + N_b_list[g]
-
         return sol['status']
 
     def test_solution(self):
@@ -333,6 +335,8 @@ class MultiCountingProblem(object):
                 assert(self.mode_count(cc.X, t) <= cc.R)
 
     def mode_count(self, X, t):
+        """When a solution has been found, return the `X`-count
+        at time `t`"""
         X_count = 0
         for g in range(len(self.graphs)):
             G = self.graphs[g]
@@ -349,6 +353,71 @@ class MultiCountingProblem(object):
                                for C, a in zip(self.cycle_sets[g],
                                                ass_rot))
         return X_count
+
+    def get_input(self, xi_list, t):
+        """When an integer solution has been found, given individual states
+        `xi_list` at time t, return individual inputs `sigma`"""
+        if self.u is None:
+            raise Exception("No solution available")
+
+        actions = []
+
+        for g in range(len(self.graphs)):
+            G = self.graphs[g]
+            N_g = np.sum(self.inits[g])
+
+            actions_g = [None] * N_g
+
+            if t < self.T:
+                # We are in prefix; states are available
+                x_g = self.x[g][:, t]
+                u_g = self.u[g][:, t]
+
+            else:
+                # We are in suffix, must build x_g, u_g from cycle assignments
+                u_g = np.zeros(G.K() * G.M())
+                x_g = np.zeros(len(self.graphs[g]))
+
+                # Rotate assignments
+                ass_rot = [deque(a) for a in self.assignments[g]]
+                for a in ass_rot:
+                    a.rotate(t - self.T)
+
+                for assgn, c in zip(ass_rot,
+                                    self.cycle_sets[g]):
+                    x_g += self.graphs[g].index_matrix(c) \
+                               .dot(assgn).flatten()
+                    for ai, ci in zip(assgn, c):
+                        u_g[G.order_fcn(ci[0]) +
+                            G.index_of_mode(ci[1]) * G.K()] += ai
+
+            # Assert that xi_list agrees with aggregate solution
+            xi_sum = np.zeros(len(self.graphs[g]))
+            for xi in xi_list[g]:
+                xi_sum[self.graphs[g].order_fcn(xi)] += 1
+            try:
+                np.testing.assert_almost_equal(xi_sum,
+                                               x_g)
+            except:
+                raise Exception("States don't agree with aggregate" +
+                                " at time " + str(t))
+
+            for n in range(N_g):
+                k = G.order_fcn(xi_list[g][n])
+                u_state = [u_g[k + G.K() * m] for m in range(G.M())]
+                print u_state
+                m = next(i for i in range(len(u_state))
+                         if u_state[i] >= 1) 
+                print m
+                actions_g[n] = G.mode(m)
+                u_g[k + G.K() * m] -= 1
+            actions.append(actions_g)
+
+        return actions
+
+
+
+
 
 ####################################
 #  Constraint-generating functions #

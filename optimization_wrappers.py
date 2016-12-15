@@ -6,6 +6,7 @@ default_solver = 'gurobi'
 
 # Try to import gurobi
 try:
+    raise Exception("asd")
     from gurobipy import * 
     TIME_LIMIT = 10 * 3600
     if SOLVER_OUTPUT:
@@ -30,11 +31,16 @@ except Exception, e:
     print "warning: cvxopt and or mosek not found"
     default_solver = 'gurobi'
 
-def _solve_mosek(c,Aiq,biq,Aeq,beq,J):
-    solsta, x_out = msk.ilp( matrix(c), _sparse_scipy_to_cvxopt(Aiq), matrix(biq), _sparse_scipy_to_cvxopt(Aeq), matrix(beq), J)
+def _solve_mosek(c, Aiq, biq, Aeq, beq, J):
+    solsta, x_out = msk.ilp(matrix(c),
+                            _sparse_scipy_to_cvxopt(Aiq),
+                            matrix(biq),
+                            _sparse_scipy_to_cvxopt(Aeq),
+                            matrix(beq))
     sol = {}
     sol['x'] = x_out
-    sol['status'] = solsta
+    if solsta == solsta.integer_optimal:
+        sol['status'] = 2
     return sol
 
 def solCallback(model, where):
