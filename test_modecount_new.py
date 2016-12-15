@@ -154,9 +154,6 @@ def test_comprehensive():
         for k1 in range(len(xi)):
             xi[k1] = G.post(xi[k1], actions[0][k1])
 
-        print xi
-
-
 def test_multi():
     G1 = ModeGraph()
     G1.add_nodes_from([1, 2, 3])
@@ -207,4 +204,3 @@ def test_multi():
 
         for k2 in range(4):
             xi[1][k2] = G1.post(xi[1][k2], actions[1][k2])
-        print xi
