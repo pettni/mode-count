@@ -148,14 +148,14 @@ def test_comprehensive():
 
     cp.test_solution()
 
-    # xi = [[i] * cp.inits[0][i] for i in ]
+    xi = sum([[i + 1] * cp.inits[0][i] for i in range(8)], [])
+    print xi
     for t in range(40):
-        actions = cp.get_input(xi, t)
+        actions = cp.get_input([xi], t)
         for k1 in range(4):
-            xi[0][k1] = G1.post(xi[0][k1], actions[0][k1])
+            xi[k1] = G1.post(xi[k1], actions[0][k1])
 
         print xi
-
 
 
 def test_multi():
