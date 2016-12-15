@@ -405,10 +405,8 @@ class MultiCountingProblem(object):
             for n in range(N_g):
                 k = G.order_fcn(xi_list[g][n])
                 u_state = [u_g[k + G.K() * m] for m in range(G.M())]
-                print u_state
                 m = next(i for i in range(len(u_state))
                          if u_state[i] >= 1) 
-                print m
                 actions_g[n] = G.mode(m)
                 u_g[k + G.K() * m] -= 1
             actions.append(actions_g)

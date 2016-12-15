@@ -6,7 +6,6 @@ default_solver = 'gurobi'
 
 # Try to import gurobi
 try:
-    raise Exception("asd")
     from gurobipy import * 
     TIME_LIMIT = 10 * 3600
     if SOLVER_OUTPUT:
