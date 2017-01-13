@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import dill
 import matplotlib.pyplot as plt
 from itertools import product
 
@@ -26,19 +27,19 @@ pop_size_2 = 10000
 theta_a = 32.
 
 # Abstraction parameters
+tau = 0.05                  # time discretization
+
 eta_1 = 0.002               # space discretization
-tau_1 = 0.05                  # time discretization
 eps_1 = 0.2                   # desired bisimulation approximation
 
 eta_2 = 0.0015               # space discretization
-tau_2 = 0.05                  # time discretization
 eps_2 = 0.2                   # desired bisimulation approximation
 
 # Disturbance level (same for both)
 delta_vf = 0.025  # disturbance level
 
 # Prefix horizon
-horizon = 10
+horizon = 20
 
 # Derived constants
 a_1 = 1. / (Rth_1 * Cth_1)
@@ -56,6 +57,7 @@ vf_off_1 = lambda theta: -a_1 * (theta - theta_a)
 vf_on_2 = lambda theta: -a_2 * (theta - theta_a) - b_2 * Pm_2
 vf_off_2 = lambda theta: -a_2 * (theta - theta_a)
 
+
 # Define a KL function beta(r,s) s.t.
 # || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
 beta_on_1 = lambda r, s: r * np.exp(-s * a_1)
@@ -69,10 +71,10 @@ beta_off_2 = lambda r, s: r * np.exp(-s * a_2)
 # plt.show()
 
 # Make sure that bisimilarity holds
-assert(verify_bisim(beta_on_1, tau_1, eta_1, eps_1, delta_vf, K_1))
-assert(verify_bisim(beta_off_1, tau_2, eta_2, eps_2, delta_vf, K_2))
-assert(verify_bisim(beta_on_2, tau_2, eta_2, eps_2, delta_vf, K_2))
-assert(verify_bisim(beta_off_2, tau_2, eta_2, eps_2, delta_vf, K_2))
+assert(verify_bisim(beta_on_1, tau, eta_1, eps_1, delta_vf, K_1))
+assert(verify_bisim(beta_off_1, tau, eta_1, eps_1, delta_vf, K_1))
+assert(verify_bisim(beta_on_2, tau, eta_2, eps_2, delta_vf, K_2))
+assert(verify_bisim(beta_off_2, tau, eta_2, eps_2, delta_vf, K_2))
 
 ################################################
 ################################################
@@ -96,7 +98,7 @@ np.random.seed(0)
 print "computing first abstraction"
 print "abstraction will have ", \
       np.product((np.array(ub) - np.array(lb)) / eta_1), " states"
-ab1 = Abstraction(lb, ub, eta_1, tau_1)
+ab1 = Abstraction(lb, ub, eta_1, tau)
 ab1.add_mode(vf_on_1, 'on')
 ab1.add_mode(vf_off_1, 'off')
 
@@ -105,15 +107,11 @@ G1 = ab1.graph
 print "computing second abstraction"
 print "abstraction will have ", \
       np.product((np.array(ub) - np.array(lb)) / eta_2), " states"
-ab2 = Abstraction(lb, ub, eta_2, tau_2)
+ab2 = Abstraction(lb, ub, eta_2, tau)
 ab2.add_mode(vf_on_2, 'on')
 ab2.add_mode(vf_off_2, 'off')
 
 G2 = ab2.graph
-
-##########################
-# Generate random cycles #
-##########################
 
 
 # Augment a cycle with first outgoing mode
@@ -123,33 +121,12 @@ def augment(G, c):
     return zip(c, outg)
 
 
-cycle_set1 = []
-c_quot_set = set([])
-while len(cycle_set1) < 25:
-    c = random_cycle(G1, [], 5, 0.8)
-    c = augment(G1, c)
-    c_quot = float(sum(1 for ci in c if 'on' in ci[1])) / len(c)
-    if c_quot not in c_quot_set:
-        cycle_set1.append(c)
-        c_quot_set.add(c_quot)
-
-cycle_set2 = []
-c_quot_set = set([])
-while len(cycle_set2) < 25:
-    c = random_cycle(G2, [], 5, 0.8)
-    c = augment(G2, c)
-    c_quot = float(sum(1 for ci in c if 'on' in ci[1])) / len(c)
-    if c_quot not in c_quot_set:
-        cycle_set2.append(c)
-        c_quot_set.add(c_quot)
-
-
 ###########################
 # Set up counting problem #
 ###########################
 
-state_1 = [22 + 1 * np.random.rand(1) for i in range(pop_size_1)]
-state_2 = [22 + 1 * np.random.rand(1) for i in range(pop_size_2)]
+state_1 = [21.6 + 1.8 * np.random.rand(1) for i in range(pop_size_1)]
+state_2 = [21.6 + 1.8 * np.random.rand(1) for i in range(pop_size_2)]
 
 cp = MultiCountingProblem(2)
 # Discrete structures from abstractions
@@ -157,16 +134,12 @@ cp.graphs[0] = G1
 cp.graphs[1] = G2
 
 # Initial aggregate conditions
-cp.inits[0] = np.zeros(len(G1))
+cp.inits[0] = np.zeros(len(G1), dtype=int)
 for s in state_1:
     cp.inits[0][G1.order_fcn(ab1.point_to_midx(s))] += 1
-cp.inits[1] = np.zeros(len(G2))
+cp.inits[1] = np.zeros(len(G2), dtype=int)
 for s in state_2:
     cp.inits[1][G2.order_fcn(ab2.point_to_midx(s))] += 1
-
-# Cycle sets
-cp.cycle_sets[0] = cycle_set1
-cp.cycle_sets[1] = cycle_set2
 
 # Add counting constraints
 cc1 = CountingConstraint(2)  # mode counting
@@ -176,14 +149,40 @@ cc1.R = (pop_size_1 + pop_size_2) / 3
 
 cc2 = CountingConstraint(2)  # safety
 unsafe_1 = [v for v, d in G1.nodes_iter(data=True)
-            if d['mid'] > theta_r + delta_th or
-            d['mid'] < theta_r - delta_th]
+            if d['mid'] > theta_r + delta_th - eps_1 or
+            d['mid'] < theta_r - delta_th + eps_1]
 cc2.X[0] = set(product(unsafe_1, ['on', 'off']))
 unsafe_2 = [v for v, d in G2.nodes_iter(data=True)
-            if d['mid'] > theta_r + delta_th or
-            d['mid'] < theta_r - delta_th]
+            if d['mid'] > theta_r + delta_th - eps_2 or
+            d['mid'] < theta_r - delta_th + eps_2]
 cc2.X[1] = set(product(unsafe_2, ['on', 'off']))
 cp.constraints += [cc1, cc2]
+
+
+# Cycle sets
+cycle_set1 = []
+c_quot_set = set([])
+while len(cycle_set1) < 25:
+    c = random_cycle(G1, unsafe_1, 5, 0.8)
+    c = augment(G1, c)
+    c_quot = float(sum(1 for ci in c if 'on' in ci[1])) / len(c)
+    if c_quot not in c_quot_set:
+        cycle_set1.append(c)
+        c_quot_set.add(c_quot)
+
+cycle_set2 = []
+c_quot_set = set([])
+while len(cycle_set2) < 25:
+    c = random_cycle(G2, unsafe_2, 5, 0.8)
+    c = augment(G2, c)
+    c_quot = float(sum(1 for ci in c if 'on' in ci[1])) / len(c)
+    if c_quot not in c_quot_set:
+        cycle_set2.append(c)
+        c_quot_set.add(c_quot)
+
+cp.cycle_sets[0] = cycle_set1
+cp.cycle_sets[1] = cycle_set2
+
 
 # Problem horizon
 cp.T = horizon
@@ -191,5 +190,7 @@ print cp.solve_prefix_suffix()
 
 cp.test_solution()
 
-for t in range(horizon * 5):
-    print cp.mode_count(cc1.X, t)
+params_1 = [vf_on_1(1) - vf_on_1(0), vf_on_1(0), vf_off_1(0)]
+params_2 = [vf_on_2(1) - vf_on_2(0), vf_on_2(0), vf_off_2(0)]
+
+dill.dump([state_1, state_2, ab1, ab2, params_1, params_2, tau, cp], open( "example_tcl_sol.p", "wb"))

@@ -154,6 +154,7 @@ def test_comprehensive():
         for k1 in range(len(xi)):
             xi[k1] = G.post(xi[k1], actions[0][k1])
 
+
 def test_multi():
     G1 = ModeGraph()
     G1.add_nodes_from([1, 2, 3])
@@ -197,10 +198,11 @@ def test_multi():
     cp.test_solution()
 
     xi = [[1, 1, 1, 1], [1, 1, 1, 1]]
-    for t in range(40):
+    for t in range(7):
         actions = cp.get_input(xi, t)
         for k1 in range(4):
             xi[0][k1] = G1.post(xi[0][k1], actions[0][k1])
 
         for k2 in range(4):
             xi[1][k2] = G1.post(xi[1][k2], actions[1][k2])
+        np.testing.assert_equal(xi, [[3, 3, 3, 3], [2, 2, 2, 2]])

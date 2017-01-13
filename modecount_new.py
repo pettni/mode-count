@@ -107,6 +107,7 @@ class MultiCountingProblem(object):
         self.x = []
         self.assignments = []
 
+
     def check_well_defined(self):
         # Check input data
         if self.T is None:
@@ -406,15 +407,12 @@ class MultiCountingProblem(object):
                 k = G.order_fcn(xi_list[g][n])
                 u_state = [u_g[k + G.K() * m] for m in range(G.M())]
                 m = next(i for i in range(len(u_state))
-                         if u_state[i] >= 1) 
+                         if u_state[i] >= 1)
                 actions_g[n] = G.mode(m)
                 u_g[k + G.K() * m] -= 1
             actions.append(actions_g)
 
         return actions
-
-
-
 
 
 ####################################
