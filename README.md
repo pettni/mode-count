@@ -40,9 +40,9 @@ python -m unittest discover
 
 ## Todo
 
-* Write code that purges forbidden parts of graph 
+* Write code that purges forbidden parts of graph: difficult because of order_fcn
 * Add option to weigh different classes in counting constraints
 * Allow for different counts in prefix
-* Non-conservative suffix options
+* Non-conservative suffix counting option
 * Return augmented cycles in random_cycles
 * Translate old examples

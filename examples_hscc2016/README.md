@@ -2,6 +2,8 @@
 
 The following examples appeared in *Petter Nilsson and Necmiye Ozay, Control synthesis for large collections of systems with mode-counting constraints, in Proceedings of the International Conference on Hybrid Systems: Computation and Control, 2016*. Scripts to produce the plots in the paper are provided.
 
+**Important:** These examples are no longer supported by the current version. To reproduce them, please use commit 166fbda352001538f85072f589bf54771fa3bfc6
+
 The figures included in the paper were generated on an iMac running OS X 10.11.2. The software has been successfully tested also in Linux environments. 
 
 Versions of relevant software used for examples in the paper

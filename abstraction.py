@@ -3,7 +3,7 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 
-from modecount_new import ModeGraph
+from counting import ModeGraph
 
 
 class Abstraction(object):
@@ -118,10 +118,10 @@ class Abstraction(object):
             and thus suitable as
             order_function in :py:func:`prefix_suffix_feasible`. '''
         assert len(node) == len(self.n_dim)
-        ret = node[0]
+        ret = np.int64(node[0])
         for i in range(1, len(self.n_dim)):
-            ret *= self.n_dim[i]
-            ret += node[i]
+            ret *= np.int64(self.n_dim[i])
+            ret += np.int64(node[i])
         return ret
 
     def idx_to_node(self, idx):

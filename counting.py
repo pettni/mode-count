@@ -6,6 +6,14 @@ from collections import deque
 from optimization_wrappers import *
 
 
+# Augment a cycle with outgoing mode
+# Todo: select correct mode
+def augment(G, c):
+    outg = [G[c[i]][c[(i + 1) % len(c)]]['modes'][0]
+            for i in range(len(c))]
+    return zip(c, outg)
+
+
 class ModeGraph(nx.DiGraph):
 
     def __init__(self):
@@ -106,7 +114,6 @@ class MultiCountingProblem(object):
         self.u = []
         self.x = []
         self.assignments = []
-
 
     def check_well_defined(self):
         # Check input data

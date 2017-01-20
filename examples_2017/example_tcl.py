@@ -1,13 +1,15 @@
 import numpy as np
 import sys
 import dill
-import matplotlib.pyplot as plt
 from itertools import product
 
 sys.path.append('../')
-from modecount_new import *
+from modecount import *
 from abstraction import *
-from random_cycle_new import random_cycle
+from random_cycle import random_cycle
+
+# Upper or lower counting bound
+experiment = "high"
 
 # Set 1 of TCL parameters
 Cth_1 = 2.
@@ -41,6 +43,12 @@ delta_vf = 0.025  # disturbance level
 # Prefix horizon
 horizon = 20
 
+# Cycle count
+num_cycles = 50
+
+# Simulation horizon
+T = 110
+
 # Derived constants
 a_1 = 1. / (Rth_1 * Cth_1)
 b_1 = eta_tcl_1 / Cth_1
@@ -57,18 +65,12 @@ vf_off_1 = lambda theta: -a_1 * (theta - theta_a)
 vf_on_2 = lambda theta: -a_2 * (theta - theta_a) - b_2 * Pm_2
 vf_off_2 = lambda theta: -a_2 * (theta - theta_a)
 
-
 # Define a KL function beta(r,s) s.t.
 # || phi(t,x) - phi(t,y) || <= beta(||x-y||, t)
 beta_on_1 = lambda r, s: r * np.exp(-s * a_1)
 beta_off_1 = lambda r, s: r * np.exp(-s * a_1)
 beta_on_2 = lambda r, s: r * np.exp(-s * a_2)
 beta_off_2 = lambda r, s: r * np.exp(-s * a_2)
-
-# eps_r = np.linspace(0, 0.2, 100)
-# plt.plot(eps_r, [e - beta_on_1(e, tau) - eta / 2 -
-# (delta_vf / K) * (np.exp(K * tau) - 1) for e in eps_r])
-# plt.show()
 
 # Make sure that bisimilarity holds
 assert(verify_bisim(beta_on_1, tau, eta_1, eps_1, delta_vf, K_1))
@@ -92,6 +94,22 @@ ub = [theta_r + delta_th]      # upper bounds
 np.random.seed(0)
 
 ################################
+
+# Print analytical bounds
+print "Maximal lower bound:", \
+    pop_size_1 * vf_off_1(lb[0]) / (-vf_on_1(lb[0]) + vf_off_1(lb[0])) \
+    + pop_size_2 * vf_off_2(lb[0]) / (-vf_on_2(lb[0]) + vf_off_2(lb[0]))
+
+print "Mimimal upper bound:", \
+    pop_size_1 + pop_size_2 - \
+    pop_size_1 * -vf_on_1(ub[0]) / (-vf_on_1(ub[0]) + vf_off_1(ub[0])) \
+    - pop_size_2 * -vf_on_2(ub[0]) / (-vf_on_2(ub[0]) + vf_off_2(ub[0]))
+
+
+################################
+
+
+################################
 # Load or compute abstractions #
 ################################
 
@@ -112,14 +130,6 @@ ab2.add_mode(vf_on_2, 'on')
 ab2.add_mode(vf_off_2, 'off')
 
 G2 = ab2.graph
-
-
-# Augment a cycle with first outgoing mode
-def augment(G, c):
-    outg = [G[c[i]][c[(i + 1) % len(c)]]['modes'][0]
-            for i in range(len(c))]
-    return zip(c, outg)
-
 
 ###########################
 # Set up counting problem #
@@ -143,9 +153,14 @@ for s in state_2:
 
 # Add counting constraints
 cc1 = CountingConstraint(2)  # mode counting
-cc1.X[0] = set(product(G1.nodes(), ['on']))
-cc1.X[1] = set(product(G2.nodes(), ['on']))
-cc1.R = (pop_size_1 + pop_size_2) / 3
+if experiment == "low":
+    cc1.X[0] = set(product(G1.nodes(), ['on']))
+    cc1.X[1] = set(product(G2.nodes(), ['on']))
+    cc1.R = 6000
+else:
+    cc1.X[0] = set(product(G1.nodes(), ['off']))
+    cc1.X[1] = set(product(G2.nodes(), ['off']))
+    cc1.R = 20000 - 6700
 
 cc2 = CountingConstraint(2)  # safety
 unsafe_1 = [v for v, d in G1.nodes_iter(data=True)
@@ -156,13 +171,14 @@ unsafe_2 = [v for v, d in G2.nodes_iter(data=True)
             if d['mid'] > theta_r + delta_th - eps_2 or
             d['mid'] < theta_r - delta_th + eps_2]
 cc2.X[1] = set(product(unsafe_2, ['on', 'off']))
+
 cp.constraints += [cc1, cc2]
 
 
 # Cycle sets
 cycle_set1 = []
 c_quot_set = set([])
-while len(cycle_set1) < 25:
+while len(cycle_set1) < num_cycles:
     c = random_cycle(G1, unsafe_1, 5, 0.8)
     c = augment(G1, c)
     c_quot = float(sum(1 for ci in c if 'on' in ci[1])) / len(c)
@@ -172,7 +188,7 @@ while len(cycle_set1) < 25:
 
 cycle_set2 = []
 c_quot_set = set([])
-while len(cycle_set2) < 25:
+while len(cycle_set2) < num_cycles:
     c = random_cycle(G2, unsafe_2, 5, 0.8)
     c = augment(G2, c)
     c_quot = float(sum(1 for ci in c if 'on' in ci[1])) / len(c)
@@ -186,11 +202,53 @@ cp.cycle_sets[1] = cycle_set2
 
 # Problem horizon
 cp.T = horizon
-print cp.solve_prefix_suffix()
+print cp.solve_prefix_suffix(solver='mosek', output=False)
 
 cp.test_solution()
 
-params_1 = [vf_on_1(1) - vf_on_1(0), vf_on_1(0), vf_off_1(0)]
-params_2 = [vf_on_2(1) - vf_on_2(0), vf_on_2(0), vf_off_2(0)]
+##############
+# SIMULATION #
+##############
 
-dill.dump([state_1, state_2, ab1, ab2, params_1, params_2, tau, cp], open( "example_tcl_sol.p", "wb"))
+# Constant model errors
+dist_1 = -0.02 + 0.04 * np.random.rand(len(state_1))
+dist_2 = -0.02 + 0.04 * np.random.rand(len(state_2))
+
+# Get parameters
+a_1, b_1_on, b_1_off = [vf_on_1(1) - vf_on_1(0), vf_on_1(0), vf_off_1(0)]
+a_2, b_2_on, b_2_off = [vf_on_2(1) - vf_on_2(0), vf_on_2(0), vf_off_2(0)]
+
+# Discrete states
+disc_state = [[ab1.point_to_midx(s) for s in state_1],
+              [ab2.point_to_midx(s) for s in state_2]]
+
+# Continuous state
+s1 = np.zeros([len(state_1), T])
+s2 = np.zeros([len(state_1), T])
+s1[:, 0] = state_1
+s2[:, 0] = state_2
+
+for t in range(T - 1):
+    actions = cp.get_input(disc_state, t)
+
+    # On/off offsets
+    b_vec1 = np.array([b_1_on if act == 'on'
+                       else b_1_off for act in actions[0]])
+    b_vec2 = np.array([b_2_on if act == 'on'
+                       else b_2_off for act in actions[1]])
+
+    # New continuous states
+    s1[:, t + 1] = np.exp(tau * a_1) * s1[:, t] + (b_vec1 / a_1) \
+        * (np.exp(tau * a_1) - 1) + tau * dist_1
+    s2[:, t + 1] = np.exp(tau * a_2) * s2[:, t] + (b_vec2 / a_2) \
+        * (np.exp(tau * a_2) - 1) + tau * dist_2
+
+    # Update discrete states
+    for i in range(10000):
+        disc_state[0][i] = ab1.graph.post(disc_state[0][i], actions[0][i])
+        disc_state[1][i] = ab2.graph.post(disc_state[1][i], actions[1][i])
+
+if experiment == "low":
+    dill.dump([s1, s2], open("example_tcl_sim_low.p", "wb"))
+else:
+    dill.dump([s1, s2], open("example_tcl_sim_high.p", "wb"))
