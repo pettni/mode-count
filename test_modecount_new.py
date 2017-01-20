@@ -1,10 +1,12 @@
 from nose.tools import *
 import numpy as np
+import scipy.sparse as sp
 import networkx as nx
 from itertools import product
 
 from modecount_new import CountingConstraint, ModeGraph, \
     MultiCountingProblem, _cycle_matrix
+from optimization_wrappers import solve_mip
 
 
 @raises(Exception)
@@ -206,3 +208,30 @@ def test_multi():
         for k2 in range(4):
             xi[1][k2] = G1.post(xi[1][k2], actions[1][k2])
         np.testing.assert_equal(xi, [[3, 3, 3, 3], [2, 2, 2, 2]])
+
+
+def test_solvers():
+    c = np.array([-1, -1])
+    Aiq = sp.coo_matrix(np.array([[0.5, 1],
+                                  [1, 0]]))
+    biq = np.array([1.75, 1.5])
+    Aeq = sp.coo_matrix((0, 2))
+    beq = np.array([])
+
+    sol = solve_mip(c, Aiq, biq, Aeq, beq, [0, 1], solver='mosek')
+    np.testing.assert_equal(sol['status'], 2)
+    np.testing.assert_equal(sol['x'], [1, 1])
+
+    sol = solve_mip(c, Aiq, biq, Aeq, beq, [0, 1], solver='gurobi')
+    np.testing.assert_equal(sol['status'], 2)
+    np.testing.assert_equal(sol['x'], [1, 1])
+
+    sol = solve_mip(c, Aiq, biq, Aeq, beq, [], solver='mosek')
+    np.testing.assert_equal(sol['status'], 2)
+    np.testing.assert_almost_equal(sol['x'], [1.5, 1])
+
+    sol = solve_mip(c, Aiq, biq, Aeq, beq, [], solver='gurobi')
+    np.testing.assert_equal(sol['status'], 2)
+    np.testing.assert_almost_equal(sol['x'], [1.5, 1])
+
+

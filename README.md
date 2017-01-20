@@ -37,3 +37,12 @@ python -m unittest discover
 ## Documentation
 
 [See the sphinx documentation](http://web.eecs.umich.edu/~pettni/mc_doc/).
+
+## Todo
+
+* Write code that purges forbidden parts of graph 
+* Add option to weigh different classes in counting constraints
+* Allow for different counts in prefix
+* Non-conservative suffix options
+* Return augmented cycles in random_cycles
+* Translate old examples
