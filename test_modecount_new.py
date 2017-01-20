@@ -146,8 +146,10 @@ def test_comprehensive():
     cp.cycle_sets[0] = [zip(c, outg(c))
                         for c in nx.simple_cycles(nx.DiGraph(G))]
 
-    cp.solve_prefix_suffix()
+    cp.solve_prefix_suffix(solver='mosek')
+    cp.test_solution()
 
+    cp.solve_prefix_suffix(solver='gurobi')
     cp.test_solution()
 
     xi = sum([[i + 1] * cp.inits[0][i] for i in range(8)], [])

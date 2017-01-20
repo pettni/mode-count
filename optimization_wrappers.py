@@ -1,18 +1,14 @@
-import numpy as np
+import sys
 import scipy.sparse as sp
+import numpy as np
 
-
-SOLVER_OUTPUT = True
 default_solver = 'gurobi'
 
 # Try to import gurobi
 try:
     from gurobipy import *
     TIME_LIMIT = 10 * 3600
-    if SOLVER_OUTPUT:
-            GUROBI_OUTPUT = 1
-    else:
-            GUROBI_OUTPUT = 0
+
 except Exception, e:
     print "warning: gurobi not found"
     default_solver = 'mosek'
@@ -21,15 +17,12 @@ except Exception, e:
 try:
     import mosek
 
-    if not SOLVER_OUTPUT:
-        {mosek.iparam.log: 0}
-
 except Exception, e:
     print "warning: cvxopt and or mosek not found"
     default_solver = 'gurobi'
 
 
-def _solve_mosek(c, Aiq, biq, Aeq, beq, J):
+def _solve_mosek(c, Aiq, biq, Aeq, beq, J, output):
     """
         Solve optimization problem
         min c' x
@@ -39,52 +32,52 @@ def _solve_mosek(c, Aiq, biq, Aeq, beq, J):
              x >= 0
         using the Mosek ILP solver
     """
+    def streamprinter(text):
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
     inf = 0.0  # for readability
 
     num_var = Aiq.shape[1]
     num_iq = Aiq.shape[0]
     num_eq = Aeq.shape[0]
 
-    Aiq = Aiq.tocsr()
-    Aeq = Aeq.tocsr()
-
     env = mosek.Env()
+    env.set_Stream(mosek.streamtype.log, streamprinter)
+
     task = env.Task(0, 0)
-    task.putintparam(mosek.iparam.log, 0)
+    task.set_Stream(mosek.streamtype.log, streamprinter)
+    task.putintparam(mosek.iparam.log, 10 * output)
 
     task.appendvars(num_var)
     task.appendcons(num_iq + num_eq)
 
-    for j in range(num_var):
-        task.putcj(j, c[j])
-        task.putbound(mosek.accmode.var, j, mosek.boundkey.lo, 0., +inf)
+    # Coefficients
+    task.putcslice(0, num_var, c)
 
-    for j in J:
-        task.putvartype(j, mosek.variabletype.type_int)
+    # Positivity
+    task.putvarboundslice(0, num_var, [mosek.boundkey.lo] * num_var,
+                                      [0.] * num_var,
+                                      [+inf] * num_var)
 
-    for i in range(num_iq):
-        # Add inequality constraints
-        start = Aiq.indptr[i]
-        end = Aiq.indptr[i + 1]
-        variables = Aiq.indices[start:end]
-        coeff = Aiq.data[start:end]
+    # Integers
+    task.putvartypelist(J, [mosek.variabletype.type_int] * len(J))
 
-        task.putarow(i, variables, coeff)
-        task.putbound(mosek.accmode.con, i, mosek.boundkey.up, -inf, biq[i])
+    # Inequality constraints
+    task.putaijlist(Aiq.row, Aiq.col, Aiq.data)
+    task.putconboundslice(0, num_iq,
+                          [mosek.boundkey.up] * num_iq,
+                          [-inf] * num_iq,
+                          biq)
 
-    for i in range(num_eq):
-        # Add equality constraints
-        start = Aeq.indptr[i]
-        end = Aeq.indptr[i + 1]
-        variables = Aiq.indices[start:end]
-        coeff = Aiq.data[start:end]
-
-        task.putarow(num_iq + i, variables, coeff)
-        task.putbound(mosek.accmode.con, num_iq + i,
-                      mosek.boundkey.fx, beq[i], +inf)
+    # Equality constraints
+    task.putaijlist(num_iq + Aeq.row, Aeq.col, Aeq.data)
+    task.putconboundslice(num_iq, num_iq + num_eq,
+                          [mosek.boundkey.fx] * num_eq,
+                          beq,
+                          beq)
 
     task.putobjsense(mosek.objsense.minimize)
-
     task.optimize()
 
     sol = {}
@@ -122,7 +115,7 @@ def solCallback(model, where):
             model.terminate()
 
 
-def _solve_gurobi(c, Aiq, biq, Aeq, beq, J):
+def _solve_gurobi(c, Aiq, biq, Aeq, beq, J, output):
     """
         Solve optimization problem
         min c' x
@@ -144,7 +137,7 @@ def _solve_gurobi(c, Aiq, biq, Aeq, beq, J):
     m = Model()
 
     # Enable/disable output
-    m.setParam(GRB.Param.OutputFlag, GUROBI_OUTPUT)
+    m.setParam(GRB.Param.OutputFlag, output)
 
     # Some solver parameters, see
     # http://www.gurobi.com/documentation/6.0/refman/mip_models.html
@@ -187,7 +180,7 @@ def _solve_gurobi(c, Aiq, biq, Aeq, beq, J):
     return sol
 
 
-def solve_mip(c, Aiq, biq, Aeq, beq, J=None, solver=default_solver):
+def solve_mip(c, Aiq, biq, Aeq, beq, J=None, solver=default_solver, output=0):
     """
     Solve the ILP
         min c' x
@@ -205,14 +198,6 @@ def solve_mip(c, Aiq, biq, Aeq, beq, J=None, solver=default_solver):
         J = range(Aiq.shape[1])
 
     if solver == 'gurobi':
-        return _solve_gurobi(c, Aiq, biq, Aeq, beq, J)
+        return _solve_gurobi(c, Aiq, biq, Aeq, beq, J, output)
     elif solver == 'mosek':
-        return _solve_mosek(c, Aiq, biq, Aeq, beq, J)
-
-
-def _sparse_scipy_to_cvxopt(A):
-    A_coo = A.tocoo()
-    return spmatrix(A_coo.data.astype(float),
-                    A_coo.row.astype(int),
-                    A_coo.col.astype(int),
-                    (A_coo.shape[0], A_coo.shape[1]), tc='d')
+        return _solve_mosek(c, Aiq, biq, Aeq, beq, J, output)

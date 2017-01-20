@@ -113,13 +113,13 @@ class MultiCountingProblem(object):
         if self.T is None:
             raise Exception("No problem horizon `T` specified")
 
-        if None in self.inits:
+        if any(x is None for x in self.inits):
             raise Exception("Initial conditions `inits` missing")
 
-        if None in self.cycle_sets:
+        if any(x is None for x in self.cycle_sets):
             raise Exception("Cycle sets `cycle_sets` missing")
 
-        if None in self.graphs:
+        if any(x is None for x in self.graphs):
             raise Exception("Graphs `graphs` missing")
 
         # Check that graphs are deterministic
@@ -155,7 +155,7 @@ class MultiCountingProblem(object):
                     if not G.has_edge(v1, v2) or m not in G[v1][v2]['modes']:
                         raise Exception("Found invalid cycle")
 
-    def solve_prefix_suffix(self):
+    def solve_prefix_suffix(self, solver=None, output=False):
 
         self.check_well_defined()
 
@@ -274,13 +274,14 @@ class MultiCountingProblem(object):
             b_iq = np.zeros(0)
 
         # Solve it
-        sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq)
+        sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq,
+                        range(N_tot), solver, output)
         # Extract solution (if valid)
         if sol['status'] == 2:
             idx0 = 0
             for g in range(len(self.graphs)):
                 self.u.append(
-                    np.array(sol['x'][idx0:idx0 + N_u_list[g]])
+                    np.array(sol['x'][idx0:idx0 + N_u_list[g]], dtype=int)
                       .reshape(T, self.graphs[g].K() * self.graphs[g].M())
                       .transpose()
                 )
