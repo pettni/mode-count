@@ -32,7 +32,7 @@ class ModeGraph(nx.DiGraph):
         return sum([self[v][w]['modes'] for w in self[v]], [])
 
     def system_matrix(self):
-        """Matrix B s.t. x(t+1) = Bx(t)"""
+        """Matrix B s.t. x(t+1) = Bu(t)"""
         def mode_matrix(m):
             data = np.array([[1, self.order_fcn(v), self.order_fcn(u)]
                             for u, v, data in self.edges_iter(data=True)
@@ -162,9 +162,9 @@ class MultiCountingProblem(object):
                     if not G.has_edge(v1, v2) or m not in G[v1][v2]['modes']:
                         raise Exception("Found invalid cycle")
 
-    def solve_prefix_suffix(self, solver=None, output=False):
+    def solve_prefix_suffix(self, solver=None, output=False, integer=True):
 
-        self.check_well_defined()
+        # self.check_well_defined()
 
         # Variables for each g in self.graphs:
         #  v_g := u_g[0] ... u_g[T-1] x_g[0] ... x_g[T-1]
@@ -281,10 +281,19 @@ class MultiCountingProblem(object):
             b_iq = np.zeros(0)
 
         # Solve it
-        sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq,
-                        range(N_tot), solver, output)
+        if integer:
+            sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq,
+                            range(N_tot), solver, output);
+        else:
+            sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq,
+                            [], solver, output);
+
         # Extract solution (if valid)
         if sol['status'] == 2:
+            self.u = []
+            self.x = []
+            self.assignments = []
+
             idx0 = 0
             for g in range(len(self.graphs)):
                 self.u.append(
@@ -311,6 +320,7 @@ class MultiCountingProblem(object):
                 )
                 idx0 += N_u_list[g] + N_x_list[g] + N_a_list[g] + N_b_list[g]
         return sol['status']
+
 
     def test_solution(self):
         for g in range(len(self.graphs)):
@@ -363,6 +373,38 @@ class MultiCountingProblem(object):
                                                ass_rot))
         return X_count
 
+    def get_aggregate_input(self, t):
+        """When an integer solution has been found, return aggregate inputs `u`
+            at time t"""
+        if self.u is None:
+            raise Exception("No solution available")
+
+        agg_u = []
+
+        for g in range(len(self.graphs)):
+            G = self.graphs[g]
+
+            if t < self.T:
+                # We are in prefix; states are available
+                u_g = self.u[g][:, t]
+
+            else:
+                u_g = np.zeros(G.K() * G.M())
+                # Rotate assignments
+                ass_rot = [deque(a) for a in self.assignments[g]]
+                for a in ass_rot:
+                    a.rotate(t - self.T)
+
+                for assgn, c in zip(ass_rot,
+                                    self.cycle_sets[g]):
+                    for ai, ci in zip(assgn, c):
+                        u_g[G.order_fcn(ci[0]) +
+                            G.index_of_mode(ci[1]) * G.K()] += ai
+            agg_u.append(u_g)
+
+        return agg_u
+
+
     def get_input(self, xi_list, t):
         """When an integer solution has been found, given individual states
         `xi_list` at time t, return individual inputs `sigma`"""
@@ -404,6 +446,7 @@ class MultiCountingProblem(object):
             xi_sum = np.zeros(len(self.graphs[g]))
             for xi in xi_list[g]:
                 xi_sum[self.graphs[g].order_fcn(xi)] += 1
+            print xi_sum
             try:
                 np.testing.assert_almost_equal(xi_sum,
                                                x_g)
@@ -421,6 +464,112 @@ class MultiCountingProblem(object):
             actions.append(actions_g)
 
         return actions
+
+
+def solve_prefix(cp, solver=None, output=False):
+
+    # cp.check_well_defined()
+
+    # Make sure that we have a valid suffix
+    for g in range(len(cp.graphs)):
+        assert(len(cp.cycle_sets[g]))
+        assert(len(cp.assignments[g]) == len(cp.cycle_sets[g]))
+        for i in range(len(cp.cycle_sets[g])):
+            assert(len(cp.assignments[g][i]) == len(cp.cycle_sets[g][i]))
+
+    # Variables for each g in cp.graphs:
+    #  v_g := u_g[0] ... u_g[T-1] x_g[0] ... x_g[T-1]
+    # These are stacked horizontally as
+    #  v_0 v_1 ... v_G-1
+
+    L = len(cp.constraints)
+    T = cp.T
+
+    # Variable counts for each class g
+    N_u_list = [T * G.K() * G.M() for G in cp.graphs]   # input vars
+    N_x_list = [T * G.K() for G in cp.graphs]   # state vars
+
+    N_tot = sum(N_u_list) + sum(N_x_list)
+
+    # Add dynamics constraints, should be block diagonalized
+    A_eq_list = []
+    b_eq_list = []
+
+    for g in range(len(cp.graphs)):
+        A_eq1_u, A_eq1_x, b_eq1 = \
+            generate_prefix_dyn_cstr(cp.graphs[g], T, cp.inits[g])
+        A_eq2_x, A_eq2_a, b_eq2 = \
+            generate_prefix_suffix_cstr(cp.graphs[g], T,
+                                        cp.cycle_sets[g])
+
+        A_eq_list.append(
+            sp.bmat([[A_eq1_u, A_eq1_x],
+                     [None, A_eq2_x]])
+        )
+
+        b_eq_list.append(
+            np.hstack([b_eq1, b_eq2 - A_eq2_a.dot(np.hstack(cp.assignments[g]))])
+        )
+
+    A_eq = sp.block_diag(A_eq_list)
+    b_eq = np.hstack(b_eq_list)
+
+    # Add counting constraints
+    A_iq_list = []
+    b_iq_list = []
+    for l in range(len(cp.constraints)):
+        cc = cp.constraints[l]
+
+        # Count over classes: Should be stacked horizontally
+        A_iq1_list = []
+
+        for g in range(len(cp.graphs)):
+            # Prefix counting
+            A_iq1_u, b_iq1 = \
+                generate_prefix_counting_cstr(cp.graphs[g], T,
+                                              cc.X[g], cc.R)
+            A_iq1_list.append(
+                sp.bmat([[A_iq1_u, sp.coo_matrix((T, N_x_list[g]))]])
+            )
+
+        # Stack horizontally
+        A_iq_list.append(sp.bmat([A_iq1_list]))
+        b_iq_list.append(b_iq1)
+
+    # Stack everything vertically
+    if len(A_iq_list) > 0:
+        A_iq = sp.bmat([[A] for A in A_iq_list])
+        b_iq = np.hstack(b_iq_list)
+    else:
+        A_iq = sp.coo_matrix((0, N_tot))
+        b_iq = np.zeros(0)
+
+    # Solve it
+    sol = solve_mip(np.zeros(N_tot), A_iq, b_iq, A_eq, b_eq,
+                    range(N_tot), solver, output);
+
+    # Extract solution (if valid)
+    if sol['status'] == 2:
+        cp.u = []
+        cp.x = []
+
+        idx0 = 0
+        for g in range(len(cp.graphs)):
+            cp.u.append(
+                np.array(sol['x'][idx0:idx0 + N_u_list[g]], dtype=int)
+                  .reshape(T, cp.graphs[g].K() * cp.graphs[g].M())
+                  .transpose()
+            )
+            cp.x.append(
+                np.hstack([
+                    np.array(cp.inits[g]).reshape(len(cp.inits[g]), 1),
+                    np.array(sol['x'][idx0 + N_u_list[g]:
+                                      idx0 + N_u_list[g] + N_x_list[g]])
+                      .reshape(T, cp.graphs[g].K()).transpose()
+                ])
+            )
+            idx0 += N_u_list[g] + N_x_list[g]
+    return sol['status']
 
 
 ####################################

@@ -4,12 +4,12 @@ import dill
 from itertools import product
 
 sys.path.append('../')
-from modecount import *
+from counting import *
 from abstraction import *
 from random_cycle import random_cycle
 
 # Upper or lower counting bound
-experiment = "high"
+experiment = "low"
 
 # Set 1 of TCL parameters
 Cth_1 = 2.
@@ -31,7 +31,7 @@ theta_a = 32.
 # Abstraction parameters
 tau = 0.05                  # time discretization
 
-eta_1 = 0.002               # space discretization
+eta_1 = 0.002               # space discretizati00on
 eps_1 = 0.2                   # desired bisimulation approximation
 
 eta_2 = 0.0015               # space discretization
@@ -97,13 +97,13 @@ np.random.seed(0)
 
 # Print analytical bounds
 print "Maximal lower bound:", \
-    pop_size_1 * vf_off_1(lb[0]) / (-vf_on_1(lb[0]) + vf_off_1(lb[0])) \
-    + pop_size_2 * vf_off_2(lb[0]) / (-vf_on_2(lb[0]) + vf_off_2(lb[0]))
+    pop_size_1 * (vf_off_1(lb[0]) - delta_vf) / (-vf_on_1(lb[0]) + vf_off_1(lb[0])) \
+    + pop_size_2 * (vf_off_2(lb[0]) - delta_vf) / (-vf_on_2(lb[0]) + vf_off_2(lb[0]))
 
 print "Mimimal upper bound:", \
     pop_size_1 + pop_size_2 - \
-    pop_size_1 * -vf_on_1(ub[0]) / (-vf_on_1(ub[0]) + vf_off_1(ub[0])) \
-    - pop_size_2 * -vf_on_2(ub[0]) / (-vf_on_2(ub[0]) + vf_off_2(ub[0]))
+    pop_size_1 * -(vf_on_1(ub[0]) + delta_vf) / (-vf_on_1(ub[0]) + vf_off_1(ub[0])) \
+    - pop_size_2 * -(vf_on_2(ub[0]) + delta_vf) / (-vf_on_2(ub[0]) + vf_off_2(ub[0]))
 
 
 ################################
@@ -156,7 +156,7 @@ cc1 = CountingConstraint(2)  # mode counting
 if experiment == "low":
     cc1.X[0] = set(product(G1.nodes(), ['on']))
     cc1.X[1] = set(product(G2.nodes(), ['on']))
-    cc1.R = 6000
+    cc1.R = 5912
 else:
     cc1.X[0] = set(product(G1.nodes(), ['off']))
     cc1.X[1] = set(product(G2.nodes(), ['off']))
@@ -202,7 +202,7 @@ cp.cycle_sets[1] = cycle_set2
 
 # Problem horizon
 cp.T = horizon
-print cp.solve_prefix_suffix(solver='mosek', output=False)
+print cp.solve_prefix_suffix(solver='gurobi', output=False)
 
 cp.test_solution()
 
@@ -224,12 +224,17 @@ disc_state = [[ab1.point_to_midx(s) for s in state_1],
 
 # Continuous state
 s1 = np.zeros([len(state_1), T])
-s2 = np.zeros([len(state_1), T])
+s2 = np.zeros([len(state_2), T])
+m1 = np.zeros([len(state_1), T])
+m2 = np.zeros([len(state_2), T])
 s1[:, 0] = state_1
 s2[:, 0] = state_2
 
 for t in range(T - 1):
     actions = cp.get_input(disc_state, t)
+
+    m1[:, t] = [0 if act=='off' else 1 for act in actions[0]]
+    m2[:, t] = [0 if act=='off' else 1 for act in actions[1]]
 
     # On/off offsets
     b_vec1 = np.array([b_1_on if act == 'on'
@@ -249,6 +254,14 @@ for t in range(T - 1):
         disc_state[1][i] = ab2.graph.post(disc_state[1][i], actions[1][i])
 
 if experiment == "low":
-    dill.dump([s1, s2], open("example_tcl_sim_low.p", "wb"))
+    dill.dump([s1, s2], open("saved/example_tcl_sim_low.p", "wb"))
+    np.savetxt("saved/count_low.txt",
+               np.vstack([np.arange(0, 0.05 * m1.shape[1], 0.05),
+                          np.sum(m1, 0) + np.sum(m2, 0)]).T
+               )
 else:
-    dill.dump([s1, s2], open("example_tcl_sim_high.p", "wb"))
+    dill.dump([s1, s2], open("saved/example_tcl_sim_high.p", "wb"))
+    np.savetxt("saved/count_high.txt",
+               np.vstack([np.arange(0, 0.05 * m1.shape[1], 0.05),
+                          np.sum(m1, 0) + np.sum(m2, 0)]).T
+               )

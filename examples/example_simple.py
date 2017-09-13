@@ -4,11 +4,15 @@ Example illustrating mode-counting synthesis on a manually defined graph.
 import sys
 
 import networkx as nx
+import matplotlib as mpl
 import matplotlib.pyplot as plt 
+import matplotlib.animation as animation
+
 from itertools import product
 
 sys.path.append('../')
 from counting import *
+from animate_count import *
 
 # Define a simple graph
 G = ModeGraph()
@@ -31,7 +35,6 @@ cp.graphs[0] = G
 cp.inits[0] = [0, 1, 6, 4, 7, 10, 2, 0]
 
 cp.T = 5
-
 
 # all simple cycles (works because G is small)
 def augment(G, c):
@@ -61,3 +64,8 @@ cp.constraints += [cc1, cc2, cc3]
 cp.solve_prefix_suffix()
 
 cp.test_solution()
+
+print "finished"
+
+ani = animate_count(cp, 8)
+plt.show()

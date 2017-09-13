@@ -10,7 +10,7 @@ Working Python environment, with
 * matplotlib (for visualization)
 * networkx
 * One of the following ILP solvers
-	* [Mosek](https://mosek.com), also requires [cvxopt](http://cvxopt.org)
+	* [Mosek](https://mosek.com)
 	* [Gurobi](http://www.gurobi.com)
 
 ### Installing the Gurobi python interface
@@ -36,6 +36,8 @@ python -m unittest discover
 
 ## Documentation
 
+(currently outdated)
+
 [See the sphinx documentation](http://web.eecs.umich.edu/~pettni/mc_doc/).
 
 ## Todo
@@ -44,5 +46,3 @@ python -m unittest discover
 * Add option to weigh different classes in counting constraints
 * Allow for different counts in prefix
 * Non-conservative suffix counting option
-* Return augmented cycles in random_cycles
-* Translate old examples
